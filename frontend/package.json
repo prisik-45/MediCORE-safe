@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node --import ./load-root-env.mjs ./node_modules/next/dist/bin/next dev",
+    "build": "node --import ./load-root-env.mjs ./node_modules/next/dist/bin/next build",
+    "start": "node --import ./load-root-env.mjs ./node_modules/next/dist/bin/next start",
     "lint": "next lint"
   },
   "dependencies": {

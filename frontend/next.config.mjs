@@ -1,10 +1,24 @@
-import { dirname } from "node:path";
+import nextEnv from "@next/env";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(__dirname, "..");
+const { loadEnvConfig } = nextEnv;
+
+loadEnvConfig(repoRoot);
+
+const publicEnv = {
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "",
+  NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || "",
+  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
+  NEXT_PUBLIC_SUPERADMIN_EMAIL: process.env.NEXT_PUBLIC_SUPERADMIN_EMAIL || "",
+};
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  env: publicEnv,
   outputFileTracingRoot: __dirname,
   allowedDevOrigins: [
     "http://localhost:3000",

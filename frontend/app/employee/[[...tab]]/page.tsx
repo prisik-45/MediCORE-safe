@@ -131,6 +131,9 @@ type InboxThread = {
   subject?: string | null;
 };
 
+const FULL_CATALOG_LIMIT = 10000;
+const FULL_INBOX_LIMIT = 10000;
+
 function supplierKey(name: string | null | undefined, email: string | null | undefined): string {
   return `${String(name || "").trim().toLowerCase()}|${String(email || "").trim().toLowerCase()}`;
 }
@@ -514,21 +517,17 @@ function searchTokens(value: unknown): string[] {
 
 function searchRelevance(row: Pick<SupplierItem, "ingredient_name" | "specification"> | string, query: string): number {
   const name = typeof row === "string" ? canonicalSearchText(row) : canonicalSearchText(row.ingredient_name);
-  const spec = typeof row === "string" ? "" : canonicalSearchText(row.specification);
   const needle = canonicalSearchText(query);
-  const haystack = `${name} ${spec}`.trim();
-  if (!needle || !haystack) return 0;
+  if (!needle || !name) return 0;
 
   let score = 0;
   if (name === needle) score += 1000;
   if (name.includes(needle)) score += 750;
-  else if (haystack.includes(needle)) score += 600;
 
   const tokens = searchTokens(query);
   if (tokens.length > 0) {
-    const haystackTokens = new Set(haystack.split(" "));
     const nameTokens = name.split(" ");
-    const matched = tokens.filter((token) => haystackTokens.has(token) || nameTokens.some((nameToken) => nameToken.includes(token) || token.includes(nameToken))).length;
+    const matched = tokens.filter((token) => nameTokens.some((nameToken) => nameToken === token || nameToken.includes(token))).length;
     score += (matched / tokens.length) * 300;
     if (matched === tokens.length) score += 150;
   }
@@ -537,7 +536,12 @@ function searchRelevance(row: Pick<SupplierItem, "ingredient_name" | "specificat
 
 function matchesSearch(row: Pick<SupplierItem, "ingredient_name" | "specification"> | string, query: string): boolean {
   if (!query.trim()) return true;
-  return searchRelevance(row, query) > 0;
+  const name = typeof row === "string" ? canonicalSearchText(row) : canonicalSearchText(row.ingredient_name);
+  const needle = canonicalSearchText(query);
+  if (!needle || !name) return false;
+  if (name.includes(needle)) return true;
+  const tokens = searchTokens(query);
+  return tokens.length > 0 && tokens.every((token) => name.split(" ").some((part) => part === token || part.includes(token)));
 }
 
 function compareSearchMatches(row: Pick<SupplierItem, "ingredient_name" | "specification"> | string, query: string): boolean {
@@ -1752,7 +1756,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
     setInboxItemsErrorId(null);
 
     authFetch(
-      `${apiBaseUrl}/api/catalogs/items?limit=500&latest_only=false&catalog_email_id=${encodeURIComponent(emailId)}`
+      `${apiBaseUrl}/api/catalogs/items?limit=${FULL_CATALOG_LIMIT}&latest_only=false&catalog_email_id=${encodeURIComponent(emailId)}`
     )
       .then(async (response) => {
         if (!response.ok) {
@@ -1802,7 +1806,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
         // Step 1: Instantly unblock Inbox and Dashboard by loading emails and supplier metadata
         const [suppliersRes, emailsRes] = await Promise.all([
           authFetch(`${apiBaseUrl}/api/suppliers`),
-          authFetch(`${apiBaseUrl}/api/catalogs/emails?limit=100`),
+          authFetch(`${apiBaseUrl}/api/catalogs/emails?limit=${FULL_INBOX_LIMIT}`),
         ]);
 
         if (reqId !== supplierRowsRequestIdRef.current) return;
@@ -1822,7 +1826,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
 
         // Step 2: Fetch catalog items in background to unblock Inbox instantly
         try {
-          const itemsRes = await authFetch(`${apiBaseUrl}/api/catalogs/items?limit=1000&latest_only=true`);
+          const itemsRes = await authFetch(`${apiBaseUrl}/api/catalogs/items?limit=${FULL_CATALOG_LIMIT}&latest_only=true`);
           if (itemsRes.ok && reqId === supplierRowsRequestIdRef.current) {
             const items: Array<SupplierItem & { supplier_name: string; email_domain?: string | null }> = await itemsRes.json();
             const supplierMeta = new Map(
@@ -2084,7 +2088,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
 
   async function fetchSyncActivitySnapshot() {
     const [emailsRes, accountsRes] = await Promise.all([
-      authFetch(`${apiBaseUrl}/api/catalogs/emails?limit=100`),
+      authFetch(`${apiBaseUrl}/api/catalogs/emails?limit=${FULL_INBOX_LIMIT}`),
       authFetch(`${apiBaseUrl}/api/email-accounts`),
     ]);
     const emails: CatalogEmailRow[] = emailsRes.ok ? await emailsRes.json() : [];

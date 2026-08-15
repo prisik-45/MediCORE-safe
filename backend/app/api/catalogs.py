@@ -68,9 +68,7 @@ def row_relevance(row: dict, query: str | None) -> float:
         return 0.0
     needle = canonical_search_text(query)
     name = canonical_search_text(row.get("ingredient_name"))
-    spec = canonical_search_text(row.get("specification"))
-    haystack = f"{name} {spec}".strip()
-    if not needle or not haystack:
+    if not needle or not name:
         return 0.0
 
     score = 0.0
@@ -78,13 +76,10 @@ def row_relevance(row: dict, query: str | None) -> float:
         score += 1000
     if needle in name:
         score += 750
-    elif needle in haystack:
-        score += 600
     tokens = search_tokens(query)
     if tokens:
-        haystack_tokens = set(haystack.split())
         name_tokens = set(name.split())
-        matched = sum(1 for token in tokens if token in haystack_tokens or any(token in name_token or name_token in token for name_token in name_tokens))
+        matched = sum(1 for token in tokens if token in name_tokens or any(token in name_token for name_token in name_tokens))
         score += (matched / len(tokens)) * 300
         if matched == len(tokens):
             score += 150
@@ -190,7 +185,7 @@ def mock_catalog_items(q: str | None, limit: int) -> list[dict]:
 @router.get("/emails")
 def list_catalog_emails(
     db: Session = Depends(get_db),
-    limit: int = Query(25, ge=1, le=100),
+    limit: int = Query(10000, ge=1, le=10000),
     current_user: dict = Depends(get_current_user)
 ) -> list[dict]:
     settings = get_settings()
@@ -240,7 +235,7 @@ def list_catalog_emails(
 def list_catalog_items(
     db: Session = Depends(get_db),
     q: str | None = None,
-    limit: int = Query(100, ge=1, le=10000),
+    limit: int = Query(10000, ge=1, le=10000),
     latest_only: bool = Query(True),
     catalog_email_id: UUID | None = Query(None),
     current_user: dict = Depends(get_current_user)
@@ -308,21 +303,10 @@ def list_catalog_items(
         tokens = search_tokens(q)
         if tokens:
             stmt = stmt.where(
-                or_(*[
-                    or_(
-                        CatalogItem.ingredient_name.ilike(f"%{token}%"),
-                        CatalogItem.raw_payload["specification"].astext.ilike(f"%{token}%"),
-                    )
-                    for token in tokens
-                ])
+                and_(*[CatalogItem.ingredient_name.ilike(f"%{token}%") for token in tokens])
             )
         else:
-            stmt = stmt.where(
-                or_(
-                    CatalogItem.ingredient_name.ilike(f"%{q}%"),
-                    CatalogItem.raw_payload["specification"].astext.ilike(f"%{q}%"),
-                )
-            )
+            stmt = stmt.where(CatalogItem.ingredient_name.ilike(f"%{q}%"))
     stmt = stmt.order_by(CatalogItem.ingredient_name.asc()).limit(limit)
     try:
         rows = [
