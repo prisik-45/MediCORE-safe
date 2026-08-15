@@ -60,11 +60,23 @@ def test_invite_employee_commits_after_smtp_success(monkeypatch):
         FakeQuery(None),
         FakeQuery(SimpleNamespace(organisation="CNS Pharma")),
     ]
-    monkeypatch.setattr(admin, "send_smtp_email", lambda *args, **kwargs: True)
+    monkeypatch.setattr(admin.secrets, "token_urlsafe", lambda length: "raw-activation-token")
+    send_mock = MagicMock(return_value=True)
+    monkeypatch.setattr(admin, "send_smtp_email", send_mock)
 
     result = admin.invite_employee(make_invite_payload(), db=db, current_user=make_current_admin())
 
     assert result == {"message": "Invitation sent successfully."}
+    stored_invite = db.add.call_args.args[0]
+    assert stored_invite.token == admin.token_digest("raw-activation-token")
+    assert "raw-activation-token" in send_mock.call_args.args[2]
     db.flush.assert_called_once()
     db.commit.assert_called_once()
     db.rollback.assert_not_called()
+
+
+def test_token_lookup_accepts_digest_and_plaintext_fallback():
+    digest = admin.token_digest("raw-token")
+
+    assert len(digest) == 64
+    assert admin.token_lookup_values("raw-token") == [digest, "raw-token"]

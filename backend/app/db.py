@@ -142,6 +142,8 @@ def create_app_engine():
 
 _engine = None
 _SessionLocal = None
+_ai_readonly_engine = None
+_AIReadOnlySessionLocal = None
 startup_error = None
 
 try:
@@ -151,6 +153,37 @@ except Exception as e:
     startup_error = e
 
 engine = _engine
+
+
+def build_ai_readonly_database_url() -> str:
+    return repair_database_url(getattr(settings, "ai_readonly_database_url", "").strip())
+
+
+def ai_readonly_database_url_configured() -> bool:
+    return bool(build_ai_readonly_database_url())
+
+
+def get_ai_readonly_session() -> Session | None:
+    global _ai_readonly_engine, _AIReadOnlySessionLocal
+
+    ai_database_url = build_ai_readonly_database_url()
+    if not ai_database_url:
+        return None
+
+    if _ai_readonly_engine is None:
+        logger.info("Using dedicated AI read-only database connection")
+        _ai_readonly_engine = create_engine(
+            ai_database_url,
+            pool_pre_ping=True,
+            connect_args=database_connect_args(ai_database_url),
+        )
+        _AIReadOnlySessionLocal = sessionmaker(
+            bind=_ai_readonly_engine,
+            autocommit=False,
+            autoflush=False,
+        )
+
+    return _AIReadOnlySessionLocal()
 
 
 def SessionLocal(*args, **kwargs):

@@ -1,5 +1,6 @@
 import secrets
 import logging
+import hashlib
 from datetime import datetime, timedelta, UTC
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,6 +32,18 @@ class CompleteActivationRequest(BaseModel):
     token: str
     password: str
     name: str
+
+
+def token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def token_lookup_values(token: str) -> list[str]:
+    digest = token_digest(token)
+    # The raw-token fallback keeps local/dev databases usable until the new
+    # migration hashes existing pending tokens.
+    return [digest, token] if digest != token else [digest]
+
 
 # 1. Dashboard Metrics Endpoint
 @router.get("/dashboard-stats")
@@ -179,7 +192,7 @@ def invite_employee(
         tenant_id=tenant_uuid,
         name=payload.name,
         email=payload.email,
-        token=token,
+        token=token_digest(token),
         expires_at=expires_at,
         status="Pending Activation"
     )
@@ -220,7 +233,7 @@ def invite_employee(
 # 4. Verify Invitation Token
 @router.get("/activate/verify")
 def verify_activation_token(token: str, db: Session = Depends(get_db)):
-    invite = db.query(EmployeeInvitation).filter(EmployeeInvitation.token == token).first()
+    invite = db.query(EmployeeInvitation).filter(EmployeeInvitation.token.in_(token_lookup_values(token))).first()
     if not invite or invite.status != "Pending Activation":
         raise HTTPException(status_code=400, detail="Invalid or already used activation token.")
     if invite.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
@@ -232,7 +245,7 @@ def verify_activation_token(token: str, db: Session = Depends(get_db)):
 # 4b. Complete Employee Account Activation without email confirmation
 @router.post("/activate/complete")
 def complete_activation(payload: CompleteActivationRequest, db: Session = Depends(get_db)):
-    invite = db.query(EmployeeInvitation).filter(EmployeeInvitation.token == payload.token).first()
+    invite = db.query(EmployeeInvitation).filter(EmployeeInvitation.token.in_(token_lookup_values(payload.token))).first()
     if not invite or invite.status != "Pending Activation":
         raise HTTPException(status_code=400, detail="Invalid or already used activation token.")
     if invite.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
@@ -489,7 +502,7 @@ def reset_password(
     
     reset_record = PasswordReset(
         user_id=user_id,
-        token=token,
+        token=token_digest(token),
         expires_at=expires_at,
         status="Pending"
     )
@@ -543,7 +556,7 @@ def reset_password(
 # 8. Verify Password Reset Token
 @router.get("/reset-password/verify")
 def verify_reset_token(token: str, db: Session = Depends(get_db)):
-    reset = db.query(PasswordReset).filter(PasswordReset.token == token, PasswordReset.status == "Pending").first()
+    reset = db.query(PasswordReset).filter(PasswordReset.token.in_(token_lookup_values(token)), PasswordReset.status == "Pending").first()
     if not reset:
         raise HTTPException(status_code=400, detail="Invalid or already used password reset token.")
     if reset.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
@@ -555,7 +568,7 @@ def verify_reset_token(token: str, db: Session = Depends(get_db)):
 # 9. Complete Password Reset
 @router.post("/reset-password/complete")
 def complete_password_reset(payload: ResetPasswordCompleteRequest, db: Session = Depends(get_db)):
-    reset = db.query(PasswordReset).filter(PasswordReset.token == payload.token, PasswordReset.status == "Pending").first()
+    reset = db.query(PasswordReset).filter(PasswordReset.token.in_(token_lookup_values(payload.token)), PasswordReset.status == "Pending").first()
     if not reset:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
     if reset.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):

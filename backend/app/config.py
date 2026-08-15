@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = Field(default="replace-me", repr=False)
     supabase_storage_bucket: str = "catalog-pdfs"
     database_url: str = Field(default="postgresql+psycopg://postgres:postgres@localhost:5432/postgres", repr=False)
+    ai_readonly_database_url: str = Field(default="", repr=False)
     supabase_db_host: str = ""
     supabase_db_port: int = 5432
     supabase_db_name: str = "postgres"
@@ -97,6 +98,8 @@ class Settings(BaseSettings):
             missing.append("GMAIL_WEBHOOK_TOKEN")
         if self.frontend_origin.startswith("http://"):
             missing.append("FRONTEND_ORIGIN must use https:// in production")
+        if not self.ai_readonly_database_url:
+            missing.append("AI_READONLY_DATABASE_URL")
         if self.transactional_email_provider.lower() == "gmail_api":
             if not self.google_client_id:
                 missing.append("GOOGLE_CLIENT_ID")

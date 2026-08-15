@@ -565,16 +565,17 @@ class ModelRouterClient:
             "- suppliers (id UUID, tenant_id UUID, name TEXT, email_domain TEXT, last_email_date TIMESTAMPTZ, certifications TEXT)\n"
             "- catalog_emails (id UUID, tenant_id UUID, supplier_id UUID, received_at TIMESTAMPTZ, raw_email_id TEXT, subject TEXT, pdf_url TEXT, processing_status TEXT)\n"
             "- catalog_items (id UUID, tenant_id UUID, catalog_email_id UUID, supplier_id UUID, ingredient_name TEXT, price_per_unit NUMERIC(14,4), currency TEXT, available_qty NUMERIC(14,4), unit TEXT, valid_until TIMESTAMPTZ, lead_time_days INT, moq NUMERIC(14,4), raw_payload JSONB)\n"
-            "- purchase_history (id UUID, tenant_id UUID, supplier_id UUID, item_id UUID, purchased_at TIMESTAMPTZ, quantity NUMERIC(14,2), price_paid NUMERIC(14,4))\n\n"
+            "Only these three tables are available to this SQL path. Do not reference purchase_history, auth, profiles, email_accounts, employee_invitations, password_resets, pg_catalog, information_schema, storage, or any other table/schema.\n\n"
             "CRITICAL SQL GENERATION RULES:\n"
-            "1. ONLY generate a read-only SELECT query (or WITH ... SELECT). Never generate INSERT, UPDATE, DELETE, DROP, ALTER, or TRUNCATE statements.\n"
+            "1. ONLY generate one read-only SELECT query. Never generate WITH/CTE, subqueries, UNION/INTERSECT/EXCEPT, INSERT, UPDATE, DELETE, DROP, ALTER, or TRUNCATE statements.\n"
             "2. Return ONLY the raw SQL code in plain text. Do not wrap in markdown markdown fences (```sql), do not include comments or explanations.\n"
-            "3. Select meaningful columns including catalog_items.id AS id, suppliers.name AS supplier_name, suppliers.email_domain AS email_domain, ingredient_name, price_per_unit, currency, available_qty, unit, moq, lead_time_days, and catalog_emails.received_at AS received_at.\n"
+            "3. Never use SELECT *. Select meaningful columns including catalog_items.id AS id, suppliers.name AS supplier_name, suppliers.email_domain AS email_domain, catalog_items.ingredient_name, catalog_items.price_per_unit, catalog_items.currency, catalog_items.available_qty, catalog_items.unit, catalog_items.moq, catalog_items.lead_time_days, and catalog_emails.received_at AS received_at.\n"
             "4. Use case-insensitive partial matching on catalog_items.ingredient_name. For multi-word ingredient searches, split meaningful words and match each with ILIKE wildcards where practical; do not require exact names.\n"
             "5. Rank closer ingredient_name matches first, then apply appropriate ORDER BY clauses (e.g. ORDER BY price_per_unit ASC NULLS LAST for best price/cheapest deal requests).\n"
             "6. When returning catalog items, always join catalog_emails on catalog_items.catalog_email_id = catalog_emails.id so received_at is the email received date for that item.\n"
             "7. Always limit results to at most 50 rows (LIMIT 50).\n"
-            "8. Tenant isolation is mandatory: every query that reads tenant-owned tables must include an explicit predicate using the bound parameter :tenant_id (for example catalog_items.tenant_id = :tenant_id). Never use a literal tenant ID."
+            "8. Tenant isolation is mandatory: every table alias must include an explicit predicate using the bound parameter :tenant_id. Example: catalog_items ci JOIN suppliers s ON ... WHERE ci.tenant_id = :tenant_id AND s.tenant_id = :tenant_id. Never use a literal tenant ID.\n"
+            "9. Do not select or reference sensitive columns such as token, password, encrypted_password, service_role, secret, api_key, access_token, refresh_token, or query_text."
         )
         content = self._chat(
             [
