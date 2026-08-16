@@ -52,11 +52,12 @@ def extract_text_with_ocr(
     conditioned = preprocess_for_ocr(image) if preprocess else image
 
     # Tiling for large/high-res images (>3000px)
-    tiles = (
+    raw_tiles = (
         create_image_tiles(conditioned, max_dimension=default_config.tile_max_dimension, overlap_px=default_config.tile_overlap_px)
         if tile
         else []
     )
+    tiles = raw_tiles[:default_config.max_ocr_tiles_per_page]
 
     all_blocks: list[ExtractedBlock] = []
 

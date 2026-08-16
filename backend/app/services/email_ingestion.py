@@ -11,6 +11,7 @@ import tempfile
 import zipfile
 
 import httpx
+from urllib.parse import unquote, urlparse
 from datetime import UTC, datetime
 from email.message import Message
 from pathlib import Path
@@ -38,10 +39,20 @@ from backend.app.services.llm import OpenRouterClient
 from backend.app.services.normalizer import normalize_item
 from backend.app.services.pdf_extract import extract_pdf_text
 from backend.app.schemas import clean_optional_text
+from backend.app.services.sanitizer import sanitize_preview_text, wrap_llm_untrusted_content
+from backend.app.file_validator import (
+    MAX_DATA_URI_BYTES,
+    MAX_DATA_URI_COUNT,
+    MAX_DOCUMENT_BYTES,
+    MAX_TOTAL_DATA_URI_BYTES,
+    MAX_TOTAL_EMAIL_ATTACHMENTS_BYTES,
+    sanitize_filename,
+    validate_document_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
-MAX_DOCUMENT_BYTES = 30 * 1024 * 1024
+MAX_ATTACHMENT_COUNT = 10
 RETRYABLE_EMAIL_STATUSES = ("failed", "error", "partial", "partially_processed")
 
 SUPPLIER_INTENT_TERMS = (
@@ -548,6 +559,47 @@ class EmailIngestionService:
         logger.info("Committed %s catalogue item(s) for email id=%s", count, raw_email_id)
         return count
 
+    def _fetch_reprocess_bytes(self, pdf_ref: str) -> bytes | None:
+        """Securely fetch attachment bytes from Supabase storage, preventing SSRF."""
+        bucket = self.settings.supabase_storage_bucket
+        supabase = get_supabase()
+
+        # Direct storage object path
+        if not pdf_ref.startswith(("http://", "https://")):
+            clean_path = pdf_ref.strip().lstrip("/")
+            try:
+                return supabase.storage.from_(bucket).download(clean_path)
+            except Exception as err:
+                logger.warning("Failed downloading storage path %s: %s", clean_path, err)
+                return None
+
+        # Public or signed URL: validate host matches configured Supabase host
+        parsed = urlparse(pdf_ref)
+        configured_supabase = urlparse(self.settings.supabase_url)
+
+        if parsed.hostname != configured_supabase.hostname:
+            logger.warning("Rejecting reprocess URL %s: host does not match configured Supabase storage host %s", pdf_ref, configured_supabase.hostname)
+            return None
+
+        # Extract bucket object path from URL
+        public_marker = f"/storage/v1/object/public/{bucket}/"
+        sign_marker = f"/storage/v1/object/sign/{bucket}/"
+        object_path = None
+        if public_marker in parsed.path:
+            object_path = unquote(parsed.path.split(public_marker, 1)[1])
+        elif sign_marker in parsed.path:
+            object_path = unquote(parsed.path.split(sign_marker, 1)[1])
+
+        if not object_path:
+            logger.warning("Rejecting reprocess URL %s: does not target configured bucket %s", pdf_ref, bucket)
+            return None
+
+        try:
+            return supabase.storage.from_(bucket).download(object_path)
+        except Exception as err:
+            logger.warning("Failed downloading validated Supabase object %s: %s", object_path, err)
+            return None
+
     def reprocess_empty_catalog_emails(self, limit: int = 25, force: bool = False) -> int:
         if force:
             empty_emails = (
@@ -569,7 +621,7 @@ class EmailIngestionService:
 
         processed = 0
         for catalog_email in empty_emails:
-            if not catalog_email.pdf_url or not catalog_email.pdf_url.startswith(("http://", "https://")):
+            if not catalog_email.pdf_url:
                 continue
             supplier = self.db.query(Supplier).filter(Supplier.id == catalog_email.supplier_id).first()
             if not supplier:
@@ -581,16 +633,15 @@ class EmailIngestionService:
                 if not ext:
                     ext = ".pdf"
                 file_path = Path(tmp_dir) / f"{catalog_email.id}{ext}"
-                try:
-                    response = httpx.get(catalog_email.pdf_url, timeout=60)
-                    response.raise_for_status()
-                except Exception as fetch_err:
-                    logger.warning("Skipping reprocess for %s: unable to fetch %s (%s)", catalog_email.raw_email_id, catalog_email.pdf_url, fetch_err)
+                
+                content = self._fetch_reprocess_bytes(catalog_email.pdf_url)
+                if not content:
+                    logger.warning("Skipping reprocess for %s: unable to securely retrieve stored content", catalog_email.raw_email_id)
                     continue
-                if len(response.content) > MAX_DOCUMENT_BYTES:
+                if len(content) > MAX_DOCUMENT_BYTES:
                     logger.warning("Skipping reprocess for %s because stored file exceeds 30 MB", catalog_email.raw_email_id)
                     continue
-                file_path.write_bytes(response.content)
+                file_path.write_bytes(content)
                 catalog_email.processing_status = "processing"
                 catalog_email.duplicate_count = 0
                 if force:
@@ -1765,7 +1816,15 @@ class EmailIngestionService:
 
     def _collect_attachments(self, message: Message) -> list[dict]:
         attachments = []
+        total_attachment_bytes = 0
+        total_data_uri_bytes = 0
+        data_uri_count = 0
+
         for part in message.walk():
+            if len(attachments) >= MAX_ATTACHMENT_COUNT:
+                logger.warning("Reached maximum attachment limit (%s) for message; ignoring remaining parts", MAX_ATTACHMENT_COUNT)
+                break
+
             filename = part.get_filename()
             if not filename:
                 content_type = part.get_content_type()
@@ -1783,7 +1842,75 @@ class EmailIngestionService:
                     else:
                         filename = f"inline_image_{len(attachments) + 1}.{sub_ext}"
                 else:
-                    continue
+                    filename = None
+
+            # Check for inline base64 images in HTML parts first (if applicable)
+            if part.get_content_type() == "text/html":
+                try:
+                    payload = part.get_payload(decode=True) or b""
+                    charset = part.get_content_charset() or "utf-8"
+                    html_str = payload.decode(charset, errors="ignore")
+                    import base64
+                    data_uri_matches = re.findall(
+                        r'src=["\']data:image/(png|jpeg|jpg|webp|bmp|tiff);base64,([^"\'\s]+)["\']',
+                        html_str,
+                        flags=re.IGNORECASE,
+                    )
+                    for img_format, base64_data in data_uri_matches:
+                        if len(attachments) >= MAX_ATTACHMENT_COUNT:
+                            break
+                        if data_uri_count >= MAX_DATA_URI_COUNT:
+                            logger.warning("Skipping inline data URI image: reached max data URI count (%s)", MAX_DATA_URI_COUNT)
+                            break
+                        # Pre-check base64 length before decoding to prevent memory exhaustion
+                        if len(base64_data) > int(MAX_DATA_URI_BYTES * 1.37) + 100:
+                            logger.warning("Skipping inline data URI image exceeding %s bytes", MAX_DATA_URI_BYTES)
+                            continue
+                        try:
+                            img_bytes = base64.b64decode(base64_data)
+                        except Exception as b64_err:
+                            logger.warning("Failed decoding inline base64 image: %s", b64_err)
+                            continue
+
+                        if len(img_bytes) > MAX_DATA_URI_BYTES:
+                            logger.warning("Skipping decoded inline image exceeding %s bytes", MAX_DATA_URI_BYTES)
+                            continue
+                        if total_data_uri_bytes + len(img_bytes) > MAX_TOTAL_DATA_URI_BYTES:
+                            logger.warning("Skipping decoded inline image: exceeds aggregate data URI budget (%s bytes)", MAX_TOTAL_DATA_URI_BYTES)
+                            break
+                        if total_attachment_bytes + len(img_bytes) > MAX_TOTAL_EMAIL_ATTACHMENTS_BYTES:
+                            logger.warning("Skipping inline image: exceeds total email attachment budget")
+                            break
+
+                        ext = f".{img_format.lower()}"
+                        if ext == ".jpeg":
+                            ext = ".jpg"
+                        img_name = f"embedded_html_image_{len(attachments) + 1}{ext}"
+
+                        is_valid, canonical_mime, err_msg = validate_document_bytes(
+                            img_bytes,
+                            img_name,
+                            declared_mime=f"image/{img_format.lower()}",
+                            max_bytes=MAX_DATA_URI_BYTES,
+                        )
+                        if not is_valid:
+                            logger.warning("Skipping invalid inline base64 image %s: %s", img_name, err_msg)
+                            continue
+
+                        attachments.append({
+                            "filename": img_name,
+                            "payload": img_bytes,
+                            "ext": ext,
+                            "mime_type": canonical_mime,
+                        })
+                        total_data_uri_bytes += len(img_bytes)
+                        total_attachment_bytes += len(img_bytes)
+                        data_uri_count += 1
+                except Exception as html_err:
+                    logger.warning("Error scanning HTML for base64 inline images: %s", html_err)
+
+            if not filename:
+                continue
 
             # Decode file name if encoded
             try:
@@ -1797,58 +1924,41 @@ class EmailIngestionService:
             except Exception:
                 pass
 
-            filename_lower = filename.lower()
-            file_ext = Path(filename_lower).suffix
-            supported_exts = (".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".xltx", ".xltm", ".xls", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".txt", ".csv")
-            if not file_ext or file_ext not in supported_exts:
-                continue
-            filename = filename.replace("\\", "/").split("/")[-1].strip()
-            if not filename:
+            safe_filename = sanitize_filename(filename)
+            file_ext = Path(safe_filename.lower()).suffix
+            if not file_ext:
                 continue
 
             payload = part.get_payload(decode=True)
             if not payload:
                 continue
+
             if len(payload) > MAX_DOCUMENT_BYTES:
-                logger.warning("Skipping attachment %s because it exceeds the 30 MB processing limit", filename)
+                logger.warning("Skipping attachment %s because it exceeds the 30 MB processing limit", safe_filename)
                 continue
 
-            mime_type = part.get_content_type()
+            if total_attachment_bytes + len(payload) > MAX_TOTAL_EMAIL_ATTACHMENTS_BYTES:
+                logger.warning("Skipping attachment %s: exceeds aggregate attachment limit (%s bytes)", safe_filename, MAX_TOTAL_EMAIL_ATTACHMENTS_BYTES)
+                continue
+
+            declared_mime = part.get_content_type()
+            is_valid, canonical_mime, err_msg = validate_document_bytes(
+                payload,
+                safe_filename,
+                declared_mime=declared_mime,
+                max_bytes=MAX_DOCUMENT_BYTES,
+            )
+            if not is_valid:
+                logger.warning("Skipping invalid attachment %s: %s", safe_filename, err_msg)
+                continue
+
             attachments.append({
-                "filename": filename,
+                "filename": safe_filename,
                 "payload": payload,
                 "ext": file_ext,
-                "mime_type": mime_type
+                "mime_type": canonical_mime,
             })
-
-            # Check for inline base64 images in HTML parts
-            if part.get_content_type() == "text/html":
-                try:
-                    charset = part.get_content_charset() or "utf-8"
-                    html_str = payload.decode(charset, errors="ignore")
-                    import base64
-                    data_uri_matches = re.findall(
-                        r'src=["\']data:image/(png|jpeg|jpg|webp|bmp|tiff);base64,([^"\'\s]+)["\']',
-                        html_str,
-                        flags=re.IGNORECASE,
-                    )
-                    for img_format, base64_data in data_uri_matches:
-                        try:
-                            img_bytes = base64.b64decode(base64_data)
-                            ext = f".{img_format.lower()}"
-                            if ext == ".jpeg":
-                                ext = ".jpg"
-                            img_name = f"embedded_html_image_{len(attachments) + 1}{ext}"
-                            attachments.append({
-                                "filename": img_name,
-                                "payload": img_bytes,
-                                "ext": ext,
-                                "mime_type": f"image/{img_format.lower()}"
-                            })
-                        except Exception as b64_err:
-                            logger.warning("Failed decoding inline base64 image: %s", b64_err)
-                except Exception as html_err:
-                    logger.warning("Error scanning HTML for base64 inline images: %s", html_err)
+            total_attachment_bytes += len(payload)
 
         return attachments
 
@@ -1884,8 +1994,7 @@ class EmailIngestionService:
 
     def _body_preview(self, body_text: str | None) -> str | None:
         cleaned = self._clean_email_body(body_text)
-        cleaned = re.sub(r"\s+", " ", cleaned or "").strip()
-        return cleaned[:12000] if cleaned else None
+        return sanitize_preview_text(cleaned, max_chars=500)
 
     def _html_to_text(self, html: str) -> str:
         parser = _HTMLTextExtractor()
@@ -2030,6 +2139,8 @@ class EmailIngestionService:
         image_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
         texts: list[str] = []
         try:
+            from backend.app.pipeline.ingestion.safe_zip import inspect_and_validate_zip
+            inspect_and_validate_zip(file_path)
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
                 tmp_path = Path(tmp_dir)
                 with zipfile.ZipFile(file_path) as docx:
@@ -2037,7 +2148,7 @@ class EmailIngestionService:
                         name
                         for name in docx.namelist()
                         if name.startswith("word/media/") and Path(name).suffix.lower() in image_exts
-                    ]
+                    ][:10]
                     for index, media_name in enumerate(media_names, start=1):
                         image_path = tmp_path / f"docx-image-{index}{Path(media_name).suffix.lower()}"
                         image_path.write_bytes(docx.read(media_name))
@@ -2115,9 +2226,11 @@ class EmailIngestionService:
 
     def _extract_xlsx_tables_from_xml(self, file_path: Path) -> str:
         try:
+            from backend.app.pipeline.ingestion.safe_zip import inspect_and_validate_zip
+            inspect_and_validate_zip(file_path)
             with zipfile.ZipFile(file_path) as workbook:
                 shared_strings = self._xlsx_shared_strings(workbook)
-                sheets = self._xlsx_sheets(workbook)
+                sheets = self._xlsx_sheets(workbook)[:10]
                 sections: list[str] = []
                 global_table_number = 0
                 for sheet_name, sheet_path in sheets:

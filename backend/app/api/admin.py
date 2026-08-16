@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import exists, func, text
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 
 from backend.app.db import get_db, get_supabase, SessionLocal
 from backend.app.auth import get_current_admin, get_current_user
@@ -14,6 +14,8 @@ from backend.app.models import Profile, Supplier, CatalogItem, CatalogEmail, Emp
 from backend.app.services.email_sender import send_smtp_email
 from backend.app.config import get_settings
 from backend.app.security import escape_html
+from backend.app.schemas import validate_password_strength
+from backend.app.rate_limiter import rate_limit_dependency
 from fastapi import BackgroundTasks
 
 router = APIRouter()
@@ -28,10 +30,20 @@ class ResetPasswordCompleteRequest(BaseModel):
     token: str
     password: str
 
+    @field_validator("password")
+    @classmethod
+    def validate_pwd(cls, v: str) -> str:
+        return validate_password_strength(v)
+
 class CompleteActivationRequest(BaseModel):
     token: str
     password: str
     name: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_pwd(cls, v: str) -> str:
+        return validate_password_strength(v)
 
 
 def token_digest(token: str) -> str:
@@ -39,10 +51,7 @@ def token_digest(token: str) -> str:
 
 
 def token_lookup_values(token: str) -> list[str]:
-    digest = token_digest(token)
-    # The raw-token fallback keeps local/dev databases usable until the new
-    # migration hashes existing pending tokens.
-    return [digest, token] if digest != token else [digest]
+    return [token_digest(token)]
 
 
 # 1. Dashboard Metrics Endpoint
@@ -124,12 +133,25 @@ class AdminRegisterRequest(BaseModel):
     password: str
     organisation: str
 
-@router.post("/register-admin", status_code=status.HTTP_201_CREATED)
+    @field_validator("password")
+    @classmethod
+    def validate_pwd(cls, v: str) -> str:
+        return validate_password_strength(v)
+
+@router.post(
+    "/register-admin",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_dependency(max_requests=5, window_seconds=600, scope="admin_register"))],
+)
 def register_admin(payload: AdminRegisterRequest, db: Session = Depends(get_db)):
     # Verify that organisation does not already exist in database profiles
     existing_org = db.query(Profile).filter(Profile.organisation == payload.organisation).first()
     if existing_org:
-        raise HTTPException(status_code=400, detail="This organisation name is already registered.")
+        logger.info("Registration rejected: organisation '%s' already exists", payload.organisation)
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to register workspace with the provided details. Please check the information or contact support.",
+        )
 
     try:
         supabase_client = get_supabase()
@@ -149,7 +171,10 @@ def register_admin(payload: AdminRegisterRequest, db: Session = Depends(get_db))
         logger.error(f"Failed to register admin workspace: {e}")
         err_msg = str(e)
         if "already exists" in err_msg.lower() or "unique" in err_msg.lower():
-            raise HTTPException(status_code=400, detail="An account with this email address is already registered.")
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to register workspace with the provided details. Please check the information or contact support.",
+            )
         raise HTTPException(status_code=500, detail="Failed to create admin workspace registration.")
 
 # 3. Add Employee / Send Invite
@@ -231,27 +256,25 @@ def invite_employee(
     return {"message": "Invitation sent successfully."}
 
 # 4. Verify Invitation Token
-@router.get("/activate/verify")
+@router.get(
+    "/activate/verify",
+    dependencies=[Depends(rate_limit_dependency(max_requests=15, window_seconds=600, scope="activate_verify"))],
+)
 def verify_activation_token(token: str, db: Session = Depends(get_db)):
     invite = db.query(EmployeeInvitation).filter(EmployeeInvitation.token.in_(token_lookup_values(token))).first()
-    if not invite or invite.status != "Pending Activation":
-        raise HTTPException(status_code=400, detail="Invalid or already used activation token.")
-    if invite.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
-        invite.status = "Expired"
-        db.commit()
-        raise HTTPException(status_code=400, detail="Activation link has expired.")
+    if not invite or invite.status != "Pending Activation" or invite.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
+        raise HTTPException(status_code=400, detail="Invalid or expired activation link.")
     return {"email": invite.email, "name": invite.name}
 
 # 4b. Complete Employee Account Activation without email confirmation
-@router.post("/activate/complete")
+@router.post(
+    "/activate/complete",
+    dependencies=[Depends(rate_limit_dependency(max_requests=10, window_seconds=600, scope="activate_complete"))],
+)
 def complete_activation(payload: CompleteActivationRequest, db: Session = Depends(get_db)):
     invite = db.query(EmployeeInvitation).filter(EmployeeInvitation.token.in_(token_lookup_values(payload.token))).first()
-    if not invite or invite.status != "Pending Activation":
-        raise HTTPException(status_code=400, detail="Invalid or already used activation token.")
-    if invite.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
-        invite.status = "Expired"
-        db.commit()
-        raise HTTPException(status_code=400, detail="Activation link has expired.")
+    if not invite or invite.status != "Pending Activation" or invite.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
+        raise HTTPException(status_code=400, detail="Invalid or expired activation link.")
         
     try:
         supabase_client = get_supabase()
@@ -554,27 +577,25 @@ def reset_password(
     return {"message": "Password reset link emailed successfully."}
 
 # 8. Verify Password Reset Token
-@router.get("/reset-password/verify")
+@router.get(
+    "/reset-password/verify",
+    dependencies=[Depends(rate_limit_dependency(max_requests=15, window_seconds=600, scope="reset_verify"))],
+)
 def verify_reset_token(token: str, db: Session = Depends(get_db)):
     reset = db.query(PasswordReset).filter(PasswordReset.token.in_(token_lookup_values(token)), PasswordReset.status == "Pending").first()
-    if not reset:
-        raise HTTPException(status_code=400, detail="Invalid or already used password reset token.")
-    if reset.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
-        reset.status = "Expired"
-        db.commit()
-        raise HTTPException(status_code=400, detail="Password reset link has expired.")
+    if not reset or reset.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
+        raise HTTPException(status_code=400, detail="Invalid or expired password reset link.")
     return {"verified": True}
 
 # 9. Complete Password Reset
-@router.post("/reset-password/complete")
+@router.post(
+    "/reset-password/complete",
+    dependencies=[Depends(rate_limit_dependency(max_requests=10, window_seconds=600, scope="reset_complete"))],
+)
 def complete_password_reset(payload: ResetPasswordCompleteRequest, db: Session = Depends(get_db)):
     reset = db.query(PasswordReset).filter(PasswordReset.token.in_(token_lookup_values(payload.token)), PasswordReset.status == "Pending").first()
-    if not reset:
+    if not reset or reset.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
         raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
-    if reset.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
-        reset.status = "Expired"
-        db.commit()
-        raise HTTPException(status_code=400, detail="Password reset link has expired.")
         
     try:
         supabase_client = get_supabase()

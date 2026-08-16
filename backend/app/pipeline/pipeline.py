@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Union
 
+from backend.app.pipeline.budget import ExtractionBudget
 from backend.app.pipeline.classification.page_classifier import classify_pdf_page
 from backend.app.pipeline.config import default_config
 from backend.app.pipeline.extraction.tables import extract_tables_from_image, extract_tables_from_pdf_page
@@ -24,34 +25,46 @@ from backend.app.pipeline.validation.confidence import validate_and_retry_low_co
 logger = logging.getLogger(__name__)
 
 
-def process_document(file_path: Union[str, Path]) -> ExtractionResult:
-    """Single entry point for processing documents (PDF, Image, DOCX, XLSX/XLS/CSV)."""
+def process_document(
+    file_path: Union[str, Path],
+    budget: ExtractionBudget | None = None,
+    allow_fallback: bool = False,
+) -> ExtractionResult:
+    """Single entry point for processing documents (PDF, Image, DOCX, XLSX/XLS/CSV) with resource bounds."""
     path = Path(file_path)
     if not path.is_file():
         raise FileNotFoundError(f"Document file not found: {path}")
 
+    effective_budget = budget or ExtractionBudget()
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        return _process_pdf_document(path)
+        return _process_pdf_document(path, budget=effective_budget)
     elif suffix in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}:
-        return _process_image_document(path)
+        return _process_image_document(path, budget=effective_budget)
     elif suffix == ".docx":
-        return _process_docx_document(path)
-    elif suffix in {".xlsx", ".xls", ".csv", ".xlsm"}:
-        return _process_xlsx_document(path)
-    else:
+        return _process_docx_document(path, budget=effective_budget)
+    elif suffix in {".xlsx", ".xls", ".csv", ".xlsm", ".xltx", ".xltm"}:
+        return _process_xlsx_document(path, budget=effective_budget)
+    elif allow_fallback:
         try:
-            return _process_image_document(path)
+            return _process_image_document(path, budget=effective_budget)
         except Exception:
             return _process_text_fallback(path)
+    else:
+        raise ValueError(f"Unsupported document format: '{suffix}'. Failing closed to protect parser resources.")
 
 
-def _process_pdf_document(path: Path) -> ExtractionResult:
+def _process_pdf_document(path: Path, budget: ExtractionBudget | None = None) -> ExtractionResult:
     result = ExtractionResult(source="pdf", file_path=str(path))
+    effective_budget = budget or ExtractionBudget()
 
     with load_pdf(path) as pdf_wrapper:
-        for page_num in range(1, pdf_wrapper.page_count + 1):
+        max_pages = min(pdf_wrapper.page_count, effective_budget.max_pdf_pages)
+        for page_num in range(1, max_pages + 1):
+            if not effective_budget.can_process_page():
+                logger.warning("PDF page extraction halted at page %s: budget exhausted", page_num)
+                break
             fitz_page = pdf_wrapper.get_page(page_num)
             classification = classify_pdf_page(fitz_page, page_number=page_num)
 
@@ -88,7 +101,7 @@ def _process_pdf_document(path: Path) -> ExtractionResult:
     return result
 
 
-def _process_image_document(path: Path) -> ExtractionResult:
+def _process_image_document(path: Path, budget: ExtractionBudget | None = None) -> ExtractionResult:
     result = ExtractionResult(source="image", file_path=str(path))
     img_wrapper = load_image(path)
     norm_img = normalize_image_resolution(img_wrapper.image)
@@ -108,7 +121,7 @@ def _process_image_document(path: Path) -> ExtractionResult:
     return result
 
 
-def _process_docx_document(path: Path) -> ExtractionResult:
+def _process_docx_document(path: Path, budget: ExtractionBudget | None = None) -> ExtractionResult:
     result = ExtractionResult(source="docx", file_path=str(path))
     docx_wrapper = load_docx(path)
 
@@ -130,7 +143,7 @@ def _process_docx_document(path: Path) -> ExtractionResult:
     return result
 
 
-def _process_xlsx_document(path: Path) -> ExtractionResult:
+def _process_xlsx_document(path: Path, budget: ExtractionBudget | None = None) -> ExtractionResult:
     result = ExtractionResult(source="xlsx", file_path=str(path))
     excel_wrapper = load_xlsx(path)
 

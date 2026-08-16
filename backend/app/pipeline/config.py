@@ -14,6 +14,7 @@ class PipelineConfig:
     # Image tiling threshold (Phase 3 requirement: split >3000px)
     tile_max_dimension: int = 3000
     tile_overlap_px: int = 200
+    max_ocr_tiles_per_page: int = 4
 
     # RapidOCR tuning (Phase 3 requirement)
     ocr_box_thresh: float = 0.3

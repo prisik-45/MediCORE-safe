@@ -32,7 +32,16 @@ def supabase_url_summary() -> str:
     return urlparse(str(settings.supabase_url).strip()).netloc or "<invalid-supabase-url>"
 
 def get_fernet() -> Fernet:
-    """Derive a 32-byte base64 key securely from SUPABASE_SERVICE_ROLE_KEY."""
+    """Return Fernet instance using MAILBOX_FERNET_KEY or legacy derived key."""
+    if settings.mailbox_fernet_key and settings.mailbox_fernet_key.strip():
+        raw = settings.mailbox_fernet_key.strip()
+        try:
+            return Fernet(raw.encode("utf-8"))
+        except Exception:
+            hashed = hashlib.sha256(raw.encode("utf-8")).digest()
+            return Fernet(base64.urlsafe_b64encode(hashed))
+
+    # Backward compatibility fallback
     key_material = settings.supabase_service_role_key.encode("utf-8")
     hashed = hashlib.sha256(key_material).digest()
     fernet_key = base64.urlsafe_b64encode(hashed)
@@ -44,9 +53,20 @@ def encrypt_password(password: str) -> str:
     return f.encrypt(password.encode("utf-8")).decode("utf-8")
 
 def decrypt_password(encrypted_password: str) -> str:
-    """Symmetrically decrypt an email/IMAP password."""
-    f = get_fernet()
-    return f.decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+    """Symmetrically decrypt an email/IMAP password with dual-read fallback."""
+    try:
+        f = get_fernet()
+        return f.decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+    except Exception as primary_err:
+        if settings.mailbox_fernet_key:
+            try:
+                legacy_material = settings.supabase_service_role_key.encode("utf-8")
+                hashed = hashlib.sha256(legacy_material).digest()
+                legacy_fernet = Fernet(base64.urlsafe_b64encode(hashed))
+                return legacy_fernet.decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+            except Exception:
+                pass
+        raise primary_err
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),

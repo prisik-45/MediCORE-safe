@@ -80,6 +80,14 @@ export function middleware(request: NextRequest) {
   
   // Route guard: only superadmin can access superadmin routes
   if (pathname.startsWith("/superadmin")) {
+    if (!isAuthenticated) {
+      const loginUrl = new URL("/login", request.url);
+      return NextResponse.redirect(loginUrl);
+    }
+    if (userRole !== "superadmin") {
+      const loginUrl = new URL("/login", request.url);
+      return NextResponse.redirect(loginUrl);
+    }
     return NextResponse.next();
   }
 

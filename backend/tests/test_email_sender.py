@@ -84,8 +84,8 @@ def test_smtp_remains_default_provider(monkeypatch):
         def __exit__(self, *args):
             return None
 
-        def starttls(self):
-            smtp_calls.append(("starttls",))
+        def starttls(self, *args, **kwargs):
+            smtp_calls.append(("starttls", kwargs.get("context")))
 
         def login(self, username, password):
             smtp_calls.append(("login", username, password))

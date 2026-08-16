@@ -1,9 +1,12 @@
 import base64
-import smtplib
 import logging
-from email.mime.text import MIMEText
+import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 import httpx
+
 from backend.app.config import get_settings
 
 settings = get_settings()
@@ -90,13 +93,14 @@ def send_smtp_email(to_email: str, subject: str, html_content: str):
             to_email, subject
         )
         return False
-        
+
     try:
         msg = _build_html_message(to_email, subject, html_content, settings.smtp_sender)
-        
+
         logger.info("Connecting to SMTP server %s:%s", settings.smtp_host, settings.smtp_port)
+        ssl_ctx = ssl.create_default_context()
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
-            server.starttls()
+            server.starttls(context=ssl_ctx)
             server.login(settings.smtp_username, settings.smtp_password)
             server.sendmail(settings.smtp_sender, to_email, msg.as_string())
             logger.info("Successfully sent email to %s", to_email)

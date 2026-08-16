@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     supabase_url: AnyHttpUrl = "https://example.supabase.co"
     supabase_service_role_key: str = Field(default="replace-me", repr=False)
     supabase_storage_bucket: str = "catalog-pdfs"
+    mailbox_fernet_key: str = Field(default="", repr=False)
     database_url: str = Field(default="postgresql+psycopg://postgres:postgres@localhost:5432/postgres", repr=False)
     ai_readonly_database_url: str = Field(default="", repr=False)
     supabase_db_host: str = ""

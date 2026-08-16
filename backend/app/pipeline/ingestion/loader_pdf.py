@@ -9,7 +9,8 @@ from typing import Generator
 import fitz
 from PIL import Image
 
-Image.MAX_IMAGE_PIXELS = None
+Image.MAX_IMAGE_PIXELS = 25_000_000
+MAX_SAFE_PIXELS_PER_PAGE = 25_000_000
 
 
 class PDFDocumentWrapper:
@@ -28,6 +29,8 @@ class PDFDocumentWrapper:
         scale = target_dpi / 72.0
         matrix = fitz.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
+        if pix.width * pix.height > MAX_SAFE_PIXELS_PER_PAGE:
+            raise ValueError(f"Rendered PDF page {page_num_1indexed} ({pix.width}x{pix.height}) exceeds max pixel limit of {MAX_SAFE_PIXELS_PER_PAGE}")
         return Image.open(io.BytesIO(pix.tobytes("png")))
 
     def close(self) -> None:

@@ -13,6 +13,27 @@ def is_missing_value(value: object) -> bool:
     return str(value).strip().lower() in MISSING_TEXT_VALUES
 
 
+COMMON_WEAK_PASSWORDS = {
+    "password", "password123", "admin1234", "12345678", "qwerty123", "letmein123", "welcome123"
+}
+
+
+def validate_password_strength(password: str) -> str:
+    if not password or len(password) < 8:
+        raise ValueError("Password must be at least 8 characters long.")
+    if len(password) > 128:
+        raise ValueError("Password cannot exceed 128 characters.")
+    if password.lower() in COMMON_WEAK_PASSWORDS:
+        raise ValueError("Password is too common or easily guessed. Please choose a stronger password.")
+
+    has_upper = any(c.isupper() for c in password)
+    has_lower = any(c.islower() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    if not (has_upper and has_lower and has_digit):
+        raise ValueError("Password must include at least one uppercase letter, one lowercase letter, and one number.")
+    return password
+
+
 def clean_optional_text(value: object) -> str | None:
     if is_missing_value(value):
         return None

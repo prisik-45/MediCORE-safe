@@ -19,6 +19,8 @@ frontend/out/
 
 .DS_Store
 *.log
+*.err
+*.tsbuildinfo
 *.sqlite
 *.db
 

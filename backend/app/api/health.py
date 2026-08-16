@@ -15,8 +15,7 @@ class ProfileUpdateRequest(BaseModel):
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    settings = get_settings()
-    return {"status": "ok", "environment": settings.environment}
+    return {"status": "ok"}
 
 
 @router.get("/api/profile")

@@ -1,4 +1,3 @@
-const PRODUCTION_API_URL = "https://medicore-production-0aac.up.railway.app";
 const CHAT_WS_PATH = "/ws/chat";
 
 function isLocalHostname(hostname: string) {
@@ -41,7 +40,7 @@ export function getApiBaseUrl() {
   }
 
   if (typeof window === "undefined") {
-    return PRODUCTION_API_URL;
+    return "http://127.0.0.1:8000";
   }
 
   const hostname = window.location.hostname;
@@ -50,7 +49,7 @@ export function getApiBaseUrl() {
     return `${window.location.protocol}//${targetHost}:8000`;
   }
 
-  return PRODUCTION_API_URL;
+  return `${window.location.origin}`;
 }
 
 export function getChatWsUrl() {
@@ -63,15 +62,15 @@ export function getChatWsUrl() {
   }
 
   if (typeof window === "undefined") {
-    return PRODUCTION_API_URL.replace(/^http/, "ws") + CHAT_WS_PATH;
+    return "ws://127.0.0.1:8000/ws/chat";
   }
 
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const hostname = window.location.hostname;
   if (isLocalHostname(hostname)) {
     const targetHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${protocol}://${targetHost}:8000${CHAT_WS_PATH}`;
+    return `${protocol}//${targetHost}:8000${CHAT_WS_PATH}`;
   }
 
-  return PRODUCTION_API_URL.replace(/^http/, "ws") + CHAT_WS_PATH;
+  return `${protocol}//${window.location.host}${CHAT_WS_PATH}`;
 }

@@ -1897,10 +1897,21 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
   async function ensureSocket() {
     if (socketRef.current?.readyState === WebSocket.OPEN) return socketRef.current;
 
-    const res = await supabase.auth.getSession();
-    const session = res?.data?.session;
-    const token = session?.access_token || "";
-    const authenticatedWsUrl = token ? `${wsUrl}?token=${token}` : wsUrl;
+    let authenticatedWsUrl = wsUrl;
+    try {
+      const ticketRes = await authFetch(`${apiBaseUrl}/api/chat/handshake-token`, { method: "POST" });
+      if (ticketRes.ok) {
+        const ticketData = await ticketRes.json();
+        if (ticketData?.ticket) {
+          authenticatedWsUrl = `${wsUrl}?ticket=${encodeURIComponent(ticketData.ticket)}`;
+        }
+      }
+    } catch {
+      // Fallback to query token if handshake fails
+      const res = await supabase.auth.getSession();
+      const token = res?.data?.session?.access_token || "";
+      authenticatedWsUrl = token ? `${wsUrl}?token=${token}` : wsUrl;
+    }
 
     const socket = new WebSocket(authenticatedWsUrl);
     socket.onmessage = (event) => {

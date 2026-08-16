@@ -31,8 +31,13 @@ def format_df_to_markdown(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+MAX_SAFE_SHEETS = 10
+MAX_SAFE_ROWS_PER_SHEET = 5000
+MAX_SAFE_COLS_PER_SHEET = 50
+
+
 def load_xlsx(file_path: Path) -> ExcelWrapper:
-    """Open spreadsheet file (.xlsx, .xls, .csv) and parse into DataFrames per sheet."""
+    """Open spreadsheet file (.xlsx, .xls, .csv) and parse into DataFrames per sheet with safety bounds."""
     suffix = file_path.suffix.lower()
     sheets: dict[str, pd.DataFrame] = {}
     raw_text: str | None = None
@@ -69,10 +74,10 @@ def load_xlsx(file_path: Path) -> ExcelWrapper:
                     header_idx = i
                     break
 
-            table_rows = all_rows[header_idx:]
-            max_cols = max((len(r) for r in table_rows), default=1)
+            table_rows = all_rows[header_idx:header_idx + MAX_SAFE_ROWS_PER_SHEET]
+            max_cols = min(max((len(r) for r in table_rows), default=1), MAX_SAFE_COLS_PER_SHEET)
             padded_rows = [
-                [" ".join(cell.split()) for cell in r] + [""] * (max_cols - len(r)) for r in table_rows
+                [" ".join(cell.split()) for cell in r[:max_cols]] + [""] * (max_cols - len(r[:max_cols])) for r in table_rows
             ]
 
             if len(padded_rows) > 1:
@@ -83,11 +88,23 @@ def load_xlsx(file_path: Path) -> ExcelWrapper:
             sheets["CSV"] = df.fillna("")
     elif suffix == ".xls":
         with pd.ExcelFile(file_path, engine="xlrd") as excel_file:
-            for sheet_name in excel_file.sheet_names:
-                sheets[sheet_name] = pd.read_excel(excel_file, sheet_name=sheet_name, dtype=str).fillna("")
+            for idx, sheet_name in enumerate(excel_file.sheet_names):
+                if idx >= MAX_SAFE_SHEETS:
+                    break
+                df = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=MAX_SAFE_ROWS_PER_SHEET, dtype=str).fillna("")
+                if df.shape[1] > MAX_SAFE_COLS_PER_SHEET:
+                    df = df.iloc[:, :MAX_SAFE_COLS_PER_SHEET]
+                sheets[sheet_name] = df
     else:  # .xlsx, .xlsm, etc.
+        from backend.app.pipeline.ingestion.safe_zip import inspect_and_validate_zip
+        inspect_and_validate_zip(file_path)
         with pd.ExcelFile(file_path, engine="openpyxl") as excel_file:
-            for sheet_name in excel_file.sheet_names:
-                sheets[sheet_name] = pd.read_excel(excel_file, sheet_name=sheet_name, dtype=str).fillna("")
+            for idx, sheet_name in enumerate(excel_file.sheet_names):
+                if idx >= MAX_SAFE_SHEETS:
+                    break
+                df = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=MAX_SAFE_ROWS_PER_SHEET, dtype=str).fillna("")
+                if df.shape[1] > MAX_SAFE_COLS_PER_SHEET:
+                    df = df.iloc[:, :MAX_SAFE_COLS_PER_SHEET]
+                sheets[sheet_name] = df
 
     return ExcelWrapper(sheets_data=sheets, raw_text=raw_text, file_path=file_path)

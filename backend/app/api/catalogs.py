@@ -14,6 +14,13 @@ from backend.app.db import ensure_supabase_storage_bucket, get_db, get_supabase
 from backend.app.models import CatalogEmail, CatalogItem, EmailAccount, EmailSyncSetting, Supplier
 from backend.app.seed_mock_catalogs import build_catalogs
 from backend.app.auth import get_current_user
+from backend.app.file_validator import (
+    CERTIFICATE_ALLOWED_EXTENSIONS,
+    MAX_CERTIFICATE_UPLOAD_BYTES,
+    read_bounded_upload_file,
+    sanitize_filename,
+    validate_document_bytes,
+)
 from backend.app.schemas import clean_optional_text
 
 router = APIRouter()
@@ -526,12 +533,28 @@ async def upload_certificate(
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found.")
 
-    contents = await file.read()
+    try:
+        contents = await read_bounded_upload_file(file, max_bytes=MAX_CERTIFICATE_UPLOAD_BYTES)
+    except ValueError as size_err:
+        raise HTTPException(status_code=413, detail=str(size_err))
+
     if not contents:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    file_name = file.filename or "certificate.pdf"
-    safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", file_name.replace(" ", "_"))
+    raw_file_name = file.filename or "certificate.pdf"
+    safe_name = sanitize_filename(raw_file_name, default_name="certificate.pdf")
+    
+    is_valid, canonical_mime, err_msg = validate_document_bytes(
+        contents,
+        safe_name,
+        declared_mime=file.content_type,
+        allowed_extensions=CERTIFICATE_ALLOWED_EXTENSIONS,
+        max_bytes=MAX_CERTIFICATE_UPLOAD_BYTES,
+    )
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=f"Invalid certificate file: {err_msg}")
+
+    file_name = safe_name
     object_path = f"certificates/{supplier_id}/{safe_name}"
 
     try:
@@ -541,7 +564,7 @@ async def upload_certificate(
         supabase.storage.from_(bucket).upload(
             object_path,
             contents,
-            {"content-type": file.content_type or "application/pdf", "upsert": "true"},
+            {"content-type": canonical_mime, "upsert": "true"},
         )
         public_url = supabase.storage.from_(bucket).get_public_url(object_path)
     except Exception as err:

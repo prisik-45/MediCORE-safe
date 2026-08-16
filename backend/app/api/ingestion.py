@@ -33,7 +33,7 @@ def imap_preview(
 def imap_preview_with_credentials(
     payload: ImapCredentials,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
 ) -> dict:
     return EmailIngestionService(db).preview_imap_inbox(
         imap_username=payload.email,
@@ -125,7 +125,7 @@ def poll_now_sync_user(
 def poll_now_sync_with_credentials(
     payload: ImapCredentials,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
 ) -> dict[str, int]:
     processed = EmailIngestionService(db).poll_imap_inbox(
         imap_username=payload.email,

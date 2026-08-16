@@ -59,7 +59,7 @@ class DependencyGuardrailTest(unittest.TestCase):
                 continue
 
             try:
-                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+                tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"), filename=str(py_file))
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Import):
                         for alias in node.names:

@@ -7,6 +7,8 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 import mammoth
 
+from backend.app.pipeline.ingestion.safe_zip import inspect_and_validate_zip
+
 
 class DocxWrapper:
     """Wrapper around Mammoth docx extraction."""
@@ -59,6 +61,7 @@ class DocxWrapper:
 
 def load_docx(file_path: Path) -> DocxWrapper:
     """Open docx file and extract markdown/html content."""
+    inspect_and_validate_zip(file_path)
     with open(file_path, "rb") as docx_file:
         html_result = mammoth.convert_to_html(docx_file)
         docx_file.seek(0)

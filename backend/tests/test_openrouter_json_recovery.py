@@ -69,7 +69,7 @@ def test_extraction_chunks_are_sized_for_primary_groq_route() -> None:
 
     chunks = client._chunk_text(text)
 
-    assert EXTRACTION_CHUNK_CHARS == 5000
+    assert EXTRACTION_CHUNK_CHARS == 40000
     assert len(chunks) > 1
     assert all(len(chunk) <= EXTRACTION_CHUNK_CHARS + 1000 for chunk in chunks)
 

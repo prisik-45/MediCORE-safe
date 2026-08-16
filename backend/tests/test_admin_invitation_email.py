@@ -75,8 +75,8 @@ def test_invite_employee_commits_after_smtp_success(monkeypatch):
     db.rollback.assert_not_called()
 
 
-def test_token_lookup_accepts_digest_and_plaintext_fallback():
+def test_token_lookup_uses_strict_digest():
     digest = admin.token_digest("raw-token")
 
     assert len(digest) == 64
-    assert admin.token_lookup_values("raw-token") == [digest, "raw-token"]
+    assert admin.token_lookup_values("raw-token") == [digest]

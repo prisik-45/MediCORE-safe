@@ -134,12 +134,53 @@ class EmailSyncSettingUpdate(BaseModel):
     trusted_suppliers: str
     pending_approvals: str
 
+import time
+from collections import defaultdict
+
+_IMAP_TEST_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+_IMAP_FAIL_LOCKOUT: dict[str, float] = {}
+
+
+def _check_imap_rate_limit(user_id: str, email_address: str) -> None:
+    now = time.time()
+    
+    # Check mailbox lockout
+    lockout_until = _IMAP_FAIL_LOCKOUT.get(email_address.lower(), 0.0)
+    if now < lockout_until:
+        wait_seconds = max(1, int(lockout_until - now))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed login attempts for this mailbox. Please try again in {wait_seconds} seconds.",
+        )
+
+    # User sliding window limit (max 5 requests per 60 seconds)
+    user_attempts = [t for t in _IMAP_TEST_ATTEMPTS[user_id] if now - t < 60]
+    _IMAP_TEST_ATTEMPTS[user_id] = user_attempts
+    if len(user_attempts) >= 5:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded for mailbox testing. Please wait a minute before trying again.",
+        )
+    _IMAP_TEST_ATTEMPTS[user_id].append(now)
+
+
+def _record_imap_failure(email_address: str) -> None:
+    now = time.time()
+    key = email_address.lower()
+    fails = [t for t in _IMAP_TEST_ATTEMPTS[f"fail:{key}"] if now - t < 300]
+    fails.append(now)
+    _IMAP_TEST_ATTEMPTS[f"fail:{key}"] = fails
+    if len(fails) >= 3:
+        _IMAP_FAIL_LOCKOUT[key] = now + 300
+
+
 # --- Helpers ---
 
 def verify_imap_credentials(host: str, port: int, email_address: str, password: str) -> tuple[bool, str]:
     """Helper to test IMAP connection and credentials synchronously."""
     try:
-        logger.info(f"Testing IMAP connection to {host}:{port} for {email_address}")
+        masked_user = email_address[:2] + "***" + email_address[email_address.find("@"):] if "@" in email_address else "user"
+        logger.info("Testing IMAP connection to %s:%s for %s", host, port, masked_user)
         if port == 993:
             # Use SSL
             mail = imaplib.IMAP4_SSL(host, port, timeout=5)
@@ -150,15 +191,17 @@ def verify_imap_credentials(host: str, port: int, email_address: str, password: 
             mail.login(email_address, password)
             mail.logout()
             return True, "IMAP connection and login verified successfully."
-        except imaplib.IMAP4.error as e:
-            logger.info("IMAP authentication failed for %s on %s:%s: %s", email_address, host, port, e)
-            return False, "IMAP authentication failed."
-        except Exception as e:
-            logger.warning("IMAP login error for %s on %s:%s: %s", email_address, host, port, e)
-            return False, "IMAP login error."
-    except Exception as e:
-        logger.warning("Could not connect to IMAP server %s:%s: %s", host, port, e)
-        return False, "Could not connect to the IMAP server."
+        except imaplib.IMAP4.error:
+            _record_imap_failure(email_address)
+            logger.info("IMAP authentication failed for %s on %s:%s", masked_user, host, port)
+            return False, "Unable to authenticate with the mail server. Verify your email and password/app password."
+        except Exception:
+            _record_imap_failure(email_address)
+            logger.warning("IMAP login error for %s on %s:%s", masked_user, host, port, exc_info=True)
+            return False, "Unable to authenticate with the mail server. Verify your email and password/app password."
+    except Exception:
+        logger.warning("Could not connect to IMAP server %s:%s", host, port, exc_info=True)
+        return False, "Could not connect to the IMAP server. Verify the server hostname and port."
 
 
 def queue_email_account_sync(account_id: UUID) -> str:
@@ -194,8 +237,11 @@ def test_imap_connection(
 ):
     """
     Test the IMAP credentials prior to saving them.
-    Requires user authentication to ensure API security.
+    Requires user authentication and enforces anti-bruteforce rate limits.
     """
+    user_id = str(current_user.get("id", "anonymous"))
+    _check_imap_rate_limit(user_id=user_id, email_address=request.email_address)
+
     success, message = verify_imap_credentials(
         host=request.imap_host,
         port=request.imap_port,

@@ -10,6 +10,7 @@ import httpx
 
 from backend.app.config import get_settings
 from backend.app.schemas import ExtractedCatalogItem, QueryPlan
+from backend.app.services.sanitizer import wrap_llm_untrusted_content
 
 logger = logging.getLogger(__name__)
 
@@ -482,7 +483,8 @@ class ModelRouterClient:
             "If a row is ambiguous, omit that row instead of guessing."
         )
         system = self._catalogue_extraction_system_prompt(reference_date)
-        payload = self._json_chat(system, pdf_text)
+        safe_user_prompt = wrap_llm_untrusted_content(pdf_text)
+        payload = self._json_chat(system, safe_user_prompt)
         extracted = []
         for item in payload.get("items", []):
             try:

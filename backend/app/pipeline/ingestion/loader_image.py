@@ -6,6 +6,9 @@ Owned by: pipeline/ingestion/loader_image.py
 from pathlib import Path
 from PIL import Image, ImageOps
 
+Image.MAX_IMAGE_PIXELS = 25_000_000
+MAX_SAFE_IMAGE_PIXELS = 25_000_000
+
 
 class ImageWrapper:
     """Wrapper around PIL Image to keep file opening encapsulated in ingestion/."""
