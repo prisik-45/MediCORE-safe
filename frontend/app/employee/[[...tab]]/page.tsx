@@ -1556,15 +1556,11 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const loadProfileDetails = async (sessionToken: string) => {
+    const loadProfileDetails = async () => {
       if (profileFetchedRef.current) return;
       profileFetchedRef.current = true;
       try {
-        const res = await fetch(`${apiBaseUrl}/api/profile`, {
-          headers: {
-            Authorization: `Bearer ${sessionToken}`
-          }
-        });
+        const res = await authFetch(`${apiBaseUrl}/api/profile`);
         if (res.ok) {
           const profileData = await res.json();
           setAuthUser(prev => {
@@ -1614,7 +1610,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
             organisation: org
           };
         });
-        loadProfileDetails(session.access_token);
+        loadProfileDetails();
       } else {
         setAuthUser(null);
         initialLoadRef.current = false;
@@ -1655,7 +1651,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
             organisation: org
           };
         });
-        loadProfileDetails(session.access_token);
+        loadProfileDetails();
       } else {
         setAuthUser(null);
         initialLoadRef.current = false;
@@ -1907,10 +1903,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
         }
       }
     } catch {
-      // Fallback to query token if handshake fails
-      const res = await supabase.auth.getSession();
-      const token = res?.data?.session?.access_token || "";
-      authenticatedWsUrl = token ? `${wsUrl}?token=${token}` : wsUrl;
+      showConnectionFailure("The MediCORE assistant could not create a secure chat session. Please retry.");
     }
 
     const socket = new WebSocket(authenticatedWsUrl);
@@ -1953,6 +1946,10 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
   async function sendMessage(text = input) {
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (trimmed.length > 1000) {
+      showConnectionFailure("ProcuraAI messages are limited to 1000 characters.");
+      return;
+    }
     setMessages((current) => [...current, { role: "user", text: trimmed }]);
     setInput("");
     setRows([]);
@@ -2021,10 +2018,6 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
 
   async function handleLogout() {
     await supabase.auth.signOut();
-    if (typeof window !== "undefined") {
-      // Clear cookie
-      document.cookie = `sb-access-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; SameSite=Lax; Secure`;
-    }
     socketRef.current?.close();
     socketRef.current = null;
     setAuthUser(null);
@@ -2069,14 +2062,10 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
 
   async function authFetch(url: string, options: RequestInit = {}) {
     try {
-      const res = await supabase.auth.getSession();
-      const session = res?.data?.session;
-      const token = session?.access_token;
       const headers = {
         ...options.headers,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
-      return await fetch(url, { ...options, headers });
+      return await fetch(url, { ...options, headers, credentials: "include" });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         showConnectionFailure("The request timed out before MediCORE responded. Please retry when the connection is stable.");
@@ -4914,7 +4903,8 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
           >
             <input
               value={input}
-              onChange={(event) => setInput(event.target.value)}
+              onChange={(event) => setInput(event.target.value.slice(0, 1000))}
+              maxLength={1000}
               placeholder="Ask ProcuraAI..."
             />
             <button type="submit" aria-label="Send message">

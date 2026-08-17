@@ -187,7 +187,7 @@ def execute_readonly_sql(
     try:
         validated_sql = validate_readonly_sql(sql_query, require_tenant=bool(tenant_id))
     except ValueError as err:
-        logger.warning("SQL validation rejected query: %s. Error: %s", sql_query, err)
+        logger.warning("SQL validation rejected AI-generated query. Error: %s", err)
         return []
 
     params: dict[str, Any] = {}
@@ -218,7 +218,7 @@ def execute_readonly_sql(
             return [dict(zip(columns, row)) for row in result.fetchall()]
         return []
     except SQLAlchemyError as err:
-        logger.error("Failed to execute read-only SQL: %s. Error: %s", validated_sql, err)
+        logger.error("Failed to execute read-only AI SQL. Error: %s", err)
         return []
     finally:
         if readonly_db is not None:

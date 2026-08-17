@@ -16,6 +16,43 @@ const publicEnv = {
   NEXT_PUBLIC_SUPERADMIN_EMAIL: process.env.NEXT_PUBLIC_SUPERADMIN_EMAIL || "",
 };
 
+function originFromUrl(value) {
+  if (!value) return "";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+}
+
+const connectSrc = new Set([
+  "'self'",
+  "https:",
+  "wss:",
+  "ws:",
+  "http://localhost:8000",
+  "http://127.0.0.1:8000",
+  "http://192.168.29.44:8000",
+  "http://192.168.29.215:8000",
+]);
+
+for (const origin of [
+  originFromUrl(publicEnv.NEXT_PUBLIC_API_URL),
+  originFromUrl(publicEnv.NEXT_PUBLIC_WS_URL),
+]) {
+  if (origin) connectSrc.add(origin);
+}
+
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob: https:",
+  `connect-src ${Array.from(connectSrc).join(" ")}`,
+  "frame-ancestors 'none'",
+].join("; ") + ";";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   env: publicEnv,
@@ -51,7 +88,7 @@ const nextConfig = {
           },
           {
             key: "Content-Security-Policy",
-            value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https: wss: ws:; frame-ancestors 'none';",
+            value: contentSecurityPolicy,
           },
         ],
       },

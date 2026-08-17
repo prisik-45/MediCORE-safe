@@ -3,8 +3,7 @@
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { getApiBaseUrl } from "@/lib/api";
-import { supabase } from "@/lib/supabase";
+import { getSessionProfile, loginWithPassword, logoutSession } from "@/lib/auth";
 import { Sparkles, ArrowRight, ShieldCheck, Mail, Lock, Loader2, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
@@ -22,70 +21,48 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password,
-      });
-
-      if (authError) {
-        setError(authError.message);
-        setLoading(false);
-        return;
-      }
-
-      const accessToken = data.session?.access_token;
-      if (!accessToken) {
-        setError("Login succeeded, but no Supabase session token was returned.");
-        setLoading(false);
-        return;
-      }
+      await loginWithPassword(email.trim(), password);
 
       // Verify database status of profile (active/disabled/deleted)
       let role = "employee";
       try {
-        const res = await fetch(`${getApiBaseUrl()}/api/profile`, {
-          headers: {
-            Authorization: `Bearer ${accessToken}`
-          }
-        });
-        if (!res.ok) {
-          await supabase.auth.signOut();
+        const profileData = await getSessionProfile();
+        if (!profileData) {
+          await logoutSession();
           setError("You are not authorised to use MediCORE");
           setLoading(false);
           return;
-        } else {
-          const profileData = await res.json();
-          role = profileData.role || "employee";
-          if (loginRole === "admin" && role !== "admin" && role !== "superadmin") {
-            await supabase.auth.signOut();
-            setError("This account is not configured as an administrator.");
-            setLoading(false);
-            return;
-          }
+        }
+        role = profileData.role || "employee";
+        if (loginRole === "admin" && role !== "admin" && role !== "superadmin") {
+          await logoutSession();
+          setError("This account is not configured as an administrator.");
+          setLoading(false);
+          return;
+        }
 
-          if (loginRole === "employee" && (role === "admin" || role === "superadmin")) {
-            await supabase.auth.signOut();
-            setError("This account is configured as an administrator. Please select Admin Login.");
-            setLoading(false);
-            return;
-          }
+        if (loginRole === "employee" && (role === "admin" || role === "superadmin")) {
+          await logoutSession();
+          setError("This account is configured as an administrator. Please select Admin Login.");
+          setLoading(false);
+          return;
+        }
 
-          if (profileData.status === "Pending Approval") {
-            await supabase.auth.signOut();
-            setError("Your workspace registration is pending approval by the MediCORE Superadmin. You will be granted access once approved.");
-            setLoading(false);
-            return;
-          }
-          if (profileData.status === "Disabled") {
-            await supabase.auth.signOut();
-            setError("You are not authorised to use MediCORE");
-            setLoading(false);
-            return;
-          }
+        if (profileData.status === "Pending Approval") {
+          await logoutSession();
+          setError("Your workspace registration is pending approval by the MediCORE Superadmin. You will be granted access once approved.");
+          setLoading(false);
+          return;
+        }
+        if (profileData.status === "Disabled") {
+          await logoutSession();
+          setError("You are not authorised to use MediCORE");
+          setLoading(false);
+          return;
         }
       } catch (err) {
         console.error("Failed to verify user profile during login:", err);
-        await supabase.auth.signOut();
+        await logoutSession();
         setError("You are not authorised to use MediCORE");
         setLoading(false);
         return;

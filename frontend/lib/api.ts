@@ -17,13 +17,17 @@ function normalizeBrowserUrl(url: string) {
     return url;
   }
 
-  if (window.location.protocol !== "https:" || !url.startsWith("http://")) {
-    return url;
-  }
-
   try {
     const parsed = new URL(url);
-    if (!isLocalHostname(parsed.hostname)) {
+    if (
+      isLocalHostname(window.location.hostname) &&
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1")
+    ) {
+      parsed.hostname = window.location.hostname === "127.0.0.1" ? "127.0.0.1" : "localhost";
+      return parsed.toString().replace(/\/$/, "");
+    }
+
+    if (window.location.protocol === "https:" && url.startsWith("http://") && !isLocalHostname(parsed.hostname)) {
       parsed.protocol = "https:";
       return parsed.toString().replace(/\/$/, "");
     }
@@ -45,8 +49,7 @@ export function getApiBaseUrl() {
 
   const hostname = window.location.hostname;
   if (isLocalHostname(hostname)) {
-    const targetHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-    return `${window.location.protocol}//${targetHost}:8000`;
+    return `${window.location.protocol}//${hostname}:8000`;
   }
 
   return `${window.location.origin}`;
@@ -68,8 +71,7 @@ export function getChatWsUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const hostname = window.location.hostname;
   if (isLocalHostname(hostname)) {
-    const targetHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-    return `${protocol}//${targetHost}:8000${CHAT_WS_PATH}`;
+    return `${protocol}//${hostname}:8000${CHAT_WS_PATH}`;
   }
 
   return `${protocol}//${window.location.host}${CHAT_WS_PATH}`;

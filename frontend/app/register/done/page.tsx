@@ -3,17 +3,16 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles, Check, ArrowRight } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getSessionProfile } from "@/lib/auth";
 
 export default function RegisterDonePage() {
   const router = useRouter();
   const [role, setRole] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then((res) => {
-      const session = res?.data?.session;
-      if (session) {
-        setRole(session.user?.user_metadata?.role || "employee");
+    getSessionProfile().then((profile) => {
+      if (profile) {
+        setRole(profile.role || "employee");
       }
     }).catch(() => {});
   }, []);

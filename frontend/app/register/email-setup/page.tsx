@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api";
-import { supabase } from "@/lib/supabase";
+import { authFetch, getSessionProfile, SessionProfile } from "@/lib/auth";
 import {
   Sparkles,
   ArrowRight,
@@ -24,7 +24,7 @@ import {
 
 export default function EmailSetupPage() {
   const router = useRouter();
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<SessionProfile | null>(null);
   const [provider, setProvider] = useState("Gmail");
   const [emailAddress, setEmailAddress] = useState("");
   const [appPassword, setAppPassword] = useState("");
@@ -45,17 +45,16 @@ export default function EmailSetupPage() {
 
   useEffect(() => {
     // Check for active session and pre-fill email address or redirect if admin
-    supabase.auth.getSession().then((res) => {
-      const session = res?.data?.session;
-      if (session) {
-        setSession(session);
-        const role = session.user?.user_metadata?.role;
+    getSessionProfile().then((profile) => {
+      if (profile) {
+        setSession(profile);
+        const role = profile.role;
         if (role === "admin") {
           router.push("/register/done");
           return;
         }
-        if (session.user?.email) {
-          setEmailAddress(session.user.email);
+        if (profile.email) {
+          setEmailAddress(profile.email);
         }
       } else {
         router.push("/login");
@@ -64,25 +63,6 @@ export default function EmailSetupPage() {
       router.push("/login");
     });
 
-    const authListener = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        setSession(session);
-        const role = session.user?.user_metadata?.role;
-        if (role === "admin") {
-          router.push("/register/done");
-          return;
-        }
-        if (session.user?.email) {
-          setEmailAddress(session.user.email);
-        }
-      }
-    });
-
-    const subscription = authListener?.data?.subscription;
-
-    return () => {
-      subscription?.unsubscribe();
-    };
   }, [router]);
 
   const apiBaseUrl = getApiBaseUrl();
@@ -98,8 +78,7 @@ export default function EmailSetupPage() {
     setTestResult(null);
 
     try {
-      const token = session?.access_token;
-      if (!token) {
+      if (!session) {
         throw new Error("No active authentication session. Please sign in again.");
       }
 
@@ -107,11 +86,10 @@ export default function EmailSetupPage() {
       const imapHost = provider === "Gmail" ? "imap.gmail.com" : "imap.gmail.com";
       const imapPort = 993;
 
-      const response = await fetch(`${apiBaseUrl}/api/email-accounts/test`, {
+      const response = await authFetch(`${apiBaseUrl}/api/email-accounts/test`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           provider,
@@ -148,19 +126,17 @@ export default function EmailSetupPage() {
     setSaving(true);
 
     try {
-      const token = session?.access_token;
-      if (!token) {
+      if (!session) {
         throw new Error("No active session found.");
       }
 
       const imapHost = provider === "Gmail" ? "imap.gmail.com" : "imap.gmail.com";
       const imapPort = 993;
 
-      const response = await fetch(`${apiBaseUrl}/api/email-accounts`, {
+      const response = await authFetch(`${apiBaseUrl}/api/email-accounts`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           provider,

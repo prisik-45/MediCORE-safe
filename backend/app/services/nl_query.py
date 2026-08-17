@@ -170,7 +170,7 @@ class NaturalLanguageQueryEngine:
                     else ""
                 )
                 if generated_sql:
-                    logger.info("ProcuraAI generated SQL original_query=%r generated_sql=%s", question, generated_sql)
+                    logger.info("ProcuraAI generated SQL for tenant_id=%s user_id=%s", tenant_id, user_id)
                 if generated_sql:
                     sql_rows = execute_readonly_sql(self.db, generated_sql, tenant_id=tenant_id)
                     if sql_rows:
@@ -445,7 +445,7 @@ class NaturalLanguageQueryEngine:
                     id=uuid4(),
                     tenant_id=tenant_id,
                     user_id=user_id,
-                    query_text=question[:2000],
+                    query_text="",
                     operation_type=operation_type,
                 )
             )
@@ -812,9 +812,7 @@ class NaturalLanguageQueryEngine:
         names = [name for (name,) in self.db.execute(stmt) if name]
         result = self._best_ingredient_result_from_candidates(extracted_phrase, names)
         logger.info(
-            "ProcuraAI ingredient match original_query=%r extracted_ingredient=%r best_database_match=%r confidence=%.3f matched_count=%d generated_sql=%r",
-            question,
-            result.extracted_phrase,
+            "ProcuraAI ingredient match best_database_match=%r confidence=%.3f matched_count=%d generated_sql=%r",
             result.best_match,
             result.confidence,
             len(result.matched_names),

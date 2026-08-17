@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth import get_current_user
 from backend.app.config import get_settings
-from backend.app.db import get_db, get_supabase
+from backend.app.db import get_db
 from backend.app.models import Profile
 from backend.app.services.llm import is_token_limit_error
 from backend.app.services.nl_query import NaturalLanguageQueryEngine
@@ -20,7 +20,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _MEMORY_TICKETS: dict[str, dict] = {}
-MAX_CHAT_MESSAGE_LENGTH = 5000
+MAX_CHAT_MESSAGE_LENGTH = 1000
 
 
 def _store_handshake_ticket(ticket: str, user_id: str, tenant_id: str) -> None:
@@ -73,10 +73,6 @@ async def chat_socket(websocket: WebSocket, db: Session = Depends(get_db)) -> No
     await websocket.accept()
 
     ticket = websocket.query_params.get("ticket")
-    token = websocket.query_params.get("token")
-    if token:
-        token = token.strip('"\'')
-
     tenant_id = None
     user_id = None
 
@@ -90,28 +86,8 @@ async def chat_socket(websocket: WebSocket, db: Session = Depends(get_db)) -> No
             await websocket.send_json({"type": "error", "message": "Authentication failed. Expired or invalid handshake ticket. Connection closed."})
             await websocket.close()
             return
-    elif token and len(token.split(".")) == 3:
-        # Legacy fallback with deprecation log
-        logger.warning("WebSocket connected using query token parameter (deprecated; upgrade client to handshake ticket)")
-        try:
-            supabase_client = get_supabase()
-            response = supabase_client.auth.get_user(token)
-            if response and response.user:
-                user_uuid = UUID(response.user.id)
-                user_id = user_uuid
-                profile = db.query(Profile).filter(Profile.id == user_uuid).first()
-                if not profile:
-                    await websocket.send_json({"type": "error", "message": "Authentication failed. Missing profile identity. Connection closed."})
-                    await websocket.close()
-                    return
-                tenant_id = user_uuid
-        except Exception:
-            logger.exception("WebSocket authentication failed with exception")
-            await websocket.send_json({"type": "error", "message": "Authentication failed. Connection closed."})
-            await websocket.close()
-            return
     else:
-        logger.warning("WebSocket connection attempt without ticket or valid token format rejected")
+        logger.warning("WebSocket connection attempt without handshake ticket rejected")
         await websocket.send_json({"type": "error", "message": "Authentication failed. Missing handshake ticket. Connection closed."})
         await websocket.close()
         return

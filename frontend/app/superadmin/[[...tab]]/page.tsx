@@ -116,9 +116,9 @@ export default function SuperadminWorkspacePage({ params }: { params: Promise<{ 
 
   const getApiUrl = getApiBaseUrl;
 
-  const verifySuperadminProfile = async (accessToken: string) => {
+  const verifySuperadminProfile = async () => {
     const response = await fetch(`${getApiUrl()}/api/profile`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      credentials: "include",
     });
     if (!response.ok) {
       throw new Error("Unable to verify superadmin profile.");
@@ -168,7 +168,7 @@ export default function SuperadminWorkspacePage({ params }: { params: Promise<{ 
       }
 
       try {
-        const profile = await verifySuperadminProfile(session.access_token);
+        const profile = await verifySuperadminProfile();
         setSuperadminName(profile.full_name || session.user.email?.split("@")[0] || "Superadmin");
         setSuperadminEmail(profile.email || session.user.email || "");
         setIsAuthorized(true);
@@ -198,7 +198,7 @@ export default function SuperadminWorkspacePage({ params }: { params: Promise<{ 
       }
 
       try {
-        const profile = await verifySuperadminProfile(data.session?.access_token || "");
+        const profile = await verifySuperadminProfile();
         setSuperadminName(profile.full_name || data.user?.email?.split("@")[0] || "Superadmin");
         setSuperadminEmail(profile.email || data.user?.email || "");
         setIsAuthorized(true);
@@ -234,11 +234,10 @@ export default function SuperadminWorkspacePage({ params }: { params: Promise<{ 
 
     const headers = {
       ...options.headers,
-      Authorization: `Bearer ${session.access_token}`,
       "Content-Type": "application/json",
     };
 
-    const res = await fetch(`${getApiUrl()}/api/superadmin${endpoint}`, { ...options, headers });
+    const res = await fetch(`${getApiUrl()}/api/superadmin${endpoint}`, { ...options, headers, credentials: "include" });
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
       throw new Error(detail.detail || "API request failed.");
@@ -368,7 +367,6 @@ export default function SuperadminWorkspacePage({ params }: { params: Promise<{ 
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    document.cookie = `sb-access-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; SameSite=Lax; Secure`;
     router.push("/login");
   };
 

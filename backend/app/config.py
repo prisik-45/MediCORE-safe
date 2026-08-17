@@ -91,6 +91,8 @@ class Settings(BaseSettings):
         missing: list[str] = []
         if self.supabase_service_role_key in {"", "replace-me"}:
             missing.append("SUPABASE_SERVICE_ROLE_KEY")
+        if not self.mailbox_fernet_key:
+            missing.append("MAILBOX_FERNET_KEY")
         if self.cerebras_api_key in {"", "replace-me"}:
             missing.append("CEREBRAS_API_KEY")
         if self.openrouter_api_key in {"", "replace-me"}:

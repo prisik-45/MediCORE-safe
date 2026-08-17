@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./styles.css";
-import AuthSync from "@/components/AuthSync";
 
 export const metadata: Metadata = {
   title: "MediCORE",
@@ -12,7 +11,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <AuthSync />
         <div className="mobile-gate">
           <div className="mobile-gate-card">
             <div className="mobile-gate-icon">

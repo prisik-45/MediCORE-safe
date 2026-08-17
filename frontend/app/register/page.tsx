@@ -4,7 +4,7 @@ import { useState, useEffect, FormEvent, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getApiBaseUrl } from "@/lib/api";
-import { supabase } from "@/lib/supabase";
+import { loginWithPassword } from "@/lib/auth";
 import { Sparkles, ArrowRight, ShieldCheck, Mail, Lock, User, Briefcase, Loader2, Info, Eye, EyeOff } from "lucide-react";
 
 function RegisterStep1Content() {
@@ -67,14 +67,7 @@ function RegisterStep1Content() {
         }
 
         // Now, log the user in immediately so that we have an active session
-        const loginRes = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password: password,
-        });
-
-        if (loginRes.error) {
-          throw new Error(loginRes.error.message || "Failed to log in after activation.");
-        }
+        await loginWithPassword(email.trim(), password);
 
         // Redirect directly to email setup
         router.push("/register/email-setup");

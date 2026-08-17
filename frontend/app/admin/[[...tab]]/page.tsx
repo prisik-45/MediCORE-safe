@@ -4,6 +4,7 @@ import React, { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import Loader from "@/components/Loader";
 import { getApiBaseUrl } from "@/lib/api";
+import { authFetch } from "@/lib/auth";
 import { 
   Users, 
   MailOpen, 
@@ -72,9 +73,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       }
 
       try {
-        const response = await fetch(`${getApiUrl()}/api/profile`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const response = await authFetch(`${getApiUrl()}/api/profile`);
         if (!response.ok) {
           throw new Error("Profile verification failed.");
         }
@@ -105,7 +104,6 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
 
   async function handleLogout() {
     await supabase.auth.signOut();
-    document.cookie = `sb-access-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; SameSite=Lax; Secure`;
     router.push("/login");
   }
 
@@ -159,9 +157,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/admin/dashboard-stats`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      const response = await authFetch(`${apiUrl}/api/admin/dashboard-stats`);
       if (!response.ok) throw new Error("Failed to load dashboard metrics.");
       const data = await response.json();
       setDashboardStats(data);
@@ -182,9 +178,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/admin/database-stats`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      const response = await authFetch(`${apiUrl}/api/admin/database-stats`);
       if (!response.ok) throw new Error("Failed to load database health metrics.");
       const data = await response.json();
       setDbStats(data);
@@ -223,9 +217,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/admin/employees`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      const response = await authFetch(`${apiUrl}/api/admin/employees`);
       if (!response.ok) throw new Error("Failed to load employee list.");
       const data = await response.json();
       const sorted = data.sort((a: Employee, b: Employee) => {
@@ -277,9 +269,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/profile`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      const response = await authFetch(`${apiUrl}/api/profile`);
       if (!response.ok) throw new Error("Failed to load profile data.");
       const data = await response.json();
       setProfileName(data.full_name || "");
@@ -302,11 +292,10 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       if (!session) return;
       const apiUrl = getApiUrl();
       
-      const response = await fetch(`${apiUrl}/api/profile`, {
+      const response = await authFetch(`${apiUrl}/api/profile`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`
         },
         body: JSON.stringify({ full_name: profileName.trim() })
       });
@@ -361,11 +350,10 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/admin/employees/invite`, {
+      const response = await authFetch(`${apiUrl}/api/admin/employees/invite`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           name: inviteName.trim(),
@@ -401,9 +389,8 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/admin/employees/${confirmRemoveId}/remove`, {
+      const response = await authFetch(`${apiUrl}/api/admin/employees/${confirmRemoveId}/remove`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => ({}));
@@ -429,9 +416,8 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/admin/employees/${confirmDeleteId}/delete`, {
+      const response = await authFetch(`${apiUrl}/api/admin/employees/${confirmDeleteId}/delete`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => ({}));
@@ -456,9 +442,8 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/admin/employees/${confirmResetId}/reset-password`, {
+      const response = await authFetch(`${apiUrl}/api/admin/employees/${confirmResetId}/reset-password`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => ({}));

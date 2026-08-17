@@ -39,6 +39,7 @@ from backend.app.services.llm import OpenRouterClient
 from backend.app.services.normalizer import normalize_item
 from backend.app.services.pdf_extract import extract_pdf_text
 from backend.app.schemas import clean_optional_text
+from backend.app.security import validate_public_network_host
 from backend.app.services.sanitizer import sanitize_preview_text, wrap_llm_untrusted_content
 from backend.app.file_validator import (
     MAX_DATA_URI_BYTES,
@@ -2697,10 +2698,10 @@ class EmailIngestionService:
         mailbox = "INBOX"
 
         try:
-            if account.imap_port == 993:
-                client = imaplib.IMAP4_SSL(account.imap_host, account.imap_port, timeout=8)
-            else:
-                client = imaplib.IMAP4(account.imap_host, account.imap_port, timeout=8)
+            safe_imap_host = validate_public_network_host(account.imap_host, field_name="imap_host")
+            if account.imap_port != 993:
+                raise ValueError("Only IMAP over SSL on port 993 is supported.")
+            client = imaplib.IMAP4_SSL(safe_imap_host, account.imap_port, timeout=8)
 
             with client:
                 client.login(account.email_address, password)
@@ -2925,6 +2926,22 @@ class EmailIngestionService:
             self.db.commit()
             return 0
 
+        try:
+            account_imap_host = validate_public_network_host(account_imap_host, field_name="imap_host")
+            if account_imap_port != 993:
+                raise ValueError("Only IMAP over SSL on port 993 is supported.")
+        except Exception as e:
+            logger.warning("Rejected unsafe IMAP settings for email account %s: %s", account_id, e)
+            self.db.query(EmailAccount).filter(EmailAccount.id == account_id).update(
+                {
+                    EmailAccount.sync_status: "error",
+                    EmailAccount.sync_error_msg: "Stored IMAP settings are invalid. Reconnect the mailbox using a public SSL IMAP host on port 993.",
+                },
+                synchronize_session=False,
+            )
+            self.db.commit()
+            return 0
+
         # Run IMAP connection
         processed = 0
         from backend.app.services.terminal_sync_status import sync_notifier
@@ -2933,10 +2950,7 @@ class EmailIngestionService:
 
         try:
             logger.info("Connecting to IMAP for %s at %s:%s", account_email_address, account_imap_host, account_imap_port)
-            if account_imap_port == 993:
-                client = imaplib.IMAP4_SSL(account_imap_host, account_imap_port, timeout=30)
-            else:
-                client = imaplib.IMAP4(account_imap_host, account_imap_port, timeout=30)
+            client = imaplib.IMAP4_SSL(account_imap_host, account_imap_port, timeout=30)
 
             with client:
                 client.login(account_email_address, password)

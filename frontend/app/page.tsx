@@ -2,19 +2,20 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
 import Loader from "@/components/Loader";
+import { getSessionProfile } from "@/lib/auth";
 
 export default function RootPage() {
   const router = useRouter();
 
   useEffect(() => {
-    supabase.auth.getSession().then((res) => {
-      const session = res?.data?.session;
-      if (session?.user) {
-        const role = session.user.user_metadata?.role;
+    getSessionProfile().then((profile) => {
+      if (profile) {
+        const role = profile.role;
         if (role === "admin") {
           router.replace("/admin");
+        } else if (role === "superadmin") {
+          router.replace("/superadmin");
         } else {
           router.replace("/employee");
         }

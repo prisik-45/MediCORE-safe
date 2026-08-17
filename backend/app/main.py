@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.app.api import catalogs, chat, health, ingestion, suppliers, webhooks, email_accounts, admin, superadmin
+from backend.app.api import auth_session, catalogs, chat, health, ingestion, suppliers, webhooks, email_accounts, admin, superadmin
 from backend.app.config import get_settings
 
 
@@ -69,6 +69,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(health.router)
+app.include_router(auth_session.router, prefix="/api/auth", tags=["auth"])
 app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"])
 app.include_router(catalogs.router, prefix="/api/catalogs", tags=["catalogs"])
 app.include_router(ingestion.router, prefix="/api/ingestion", tags=["ingestion"])

@@ -234,3 +234,5 @@ Trigger a poll from another terminal:
 ```powershell
 Invoke-RestMethod -Method Post http://localhost:8000/api/ingestion/poll-now
 ```
+Fernet key : uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+MAILBOX_FERNET_KEY=

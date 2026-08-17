@@ -185,23 +185,18 @@ class ModelRouterClient:
                         response.raise_for_status()
                     except httpx.HTTPStatusError:
                         logger.warning(
-                            "LLM provider=%s failed status=%s input_chars=%s response=%s",
+                            "LLM provider=%s failed status=%s input_chars=%s response_bytes=%s",
                             provider.name,
                             response.status_code,
                             input_chars,
-                            body.decode("utf-8", errors="replace")[:LLM_ERROR_BODY_PREVIEW_CHARS],
+                            len(body),
                         )
                         raise
                     break
             logger.info("LLM response received provider=%s status=%s response_bytes=%s", provider.name, response.status_code, len(body))
             data = json.loads(body.decode("utf-8", errors="replace"))
         content = data["choices"][0]["message"].get("content") or ""
-        logger.info(
-            "LLM content decoded provider=%s output_chars=%s preview=%s",
-            provider.name,
-            len(content),
-            content[:LLM_RESPONSE_PREVIEW_CHARS].replace("\n", " "),
-        )
+        logger.info("LLM content decoded provider=%s output_chars=%s", provider.name, len(content))
         return content
 
     def _read_llm_response_body(self, response: httpx.Response) -> bytes:
@@ -318,7 +313,7 @@ class ModelRouterClient:
             logger.warning("Recovered %s item(s) from malformed LLM JSON response", len(items))
             return {"items": items}
 
-        logger.error("LLM provider returned invalid JSON. Response preview: %s", cleaned[:1000])
+        logger.error("LLM provider returned invalid JSON. Response chars=%s", len(cleaned))
         raise json.JSONDecodeError("LLM provider response was not valid JSON", cleaned, 0)
 
     def _strip_json_fences(self, content: str) -> str:
