@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 MAX_ATTACHMENT_COUNT = 10
 RETRYABLE_EMAIL_STATUSES = ("failed", "error", "partial", "partially_processed")
 IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+CLASSIFIABLE_DOCUMENT_EXTENSIONS = {".pdf", ".docx"}
 
 SUPPLIER_INTENT_TERMS = (
     "catalog",
@@ -479,7 +480,7 @@ class EmailIngestionService:
                         country_contexts.append(text)
                         extracted_text_parts.append(text)
                     email_context = f"{catalog_email.subject or ''}\n{catalog_email.body_preview or ''}"
-                    if ext == ".pdf":
+                    if ext in CLASSIFIABLE_DOCUMENT_EXTENSIONS:
                         classification = self._classify_document(target_name, ext, text, context_text=email_context)
                         logger.info(
                             "Classified document %s as %s confidence=%.2f",
@@ -499,7 +500,7 @@ class EmailIngestionService:
                                     "material_hint": classification.material_hint or "",
                                 }
                             )
-                            logger.info("Stored certificate PDF %s for email id=%s", target_name, raw_email_id)
+                            logger.info("Stored certificate document %s for email id=%s", target_name, raw_email_id)
                             continue
 
                         if classification.category == OTHER:
@@ -701,7 +702,7 @@ class EmailIngestionService:
 
                 text = self._extract_text_from_file(file_path, ext)
                 logger.info("Extracted %s characters while reprocessing email id=%s", len(text), catalog_email.raw_email_id)
-                if ext == ".pdf":
+                if ext in CLASSIFIABLE_DOCUMENT_EXTENSIONS:
                     classification = self._classify_document(file_path.name, ext, text)
                     if classification.category != CATALOGUE:
                         catalog_email.processing_status = classification.category
@@ -864,6 +865,7 @@ class EmailIngestionService:
         seen_in_document: set[tuple] = set()
         for item in items:
             item = self._with_source_note(item, text)
+            item = self._remove_unsupported_price(item, text)
             if not self._has_valid_ingredient_name(item):
                 logger.warning(
                     "Skipping extracted item with invalid ingredient name: %s",
@@ -1039,6 +1041,50 @@ class EmailIngestionService:
             f"{number:.4f}".rstrip("0").rstrip("."),
         }
         return any(variant in compact_line for variant in variants if variant)
+
+    def _remove_unsupported_price(self, item, text: str):
+        if item.price_per_unit is None or self._item_has_price_evidence(item, text):
+            return item
+        logger.info(
+            "Clearing unsupported price for item %s because source evidence has quantity/volume but no price signal",
+            item.ingredient_name,
+        )
+        return item.model_copy(update={"price_per_unit": None, "currency": ""})
+
+    def _item_has_price_evidence(self, item, text: str) -> bool:
+        notes_payload = self._notes_payload(item.notes)
+        evidence = " ".join(
+            filter(
+                None,
+                [
+                    notes_payload.get("original_price"),
+                    notes_payload.get("price_display"),
+                    notes_payload.get("source"),
+                    item.notes or "",
+                ],
+            )
+        )
+        if self._text_has_price_signal(evidence):
+            return True
+
+        ingredient = self._canonical_match_text(item.ingredient_name)
+        for line in text.splitlines():
+            canonical_line = self._canonical_match_text(line)
+            if ingredient and ingredient in canonical_line and self._text_has_price_signal(line):
+                return True
+        return False
+
+    def _text_has_price_signal(self, value: str | None) -> bool:
+        if not value:
+            return False
+        return bool(
+            re.search(
+                r"(?:price|rate|quote|cost|fob|cif|exw|cnf|c&f|ddp|dap|"
+                r"US\$|\$|USD|INR|Rs\.?|₹|EUR|€|GBP|£|CAD|AUD|SGD|CHF|AED|CNY|JPY|/\s*(?:kg|g|mg|ml|l|unit|pack|bag|drum|mt|ton))",
+                value,
+                flags=re.IGNORECASE,
+            )
+        )
 
     def _has_required_grounded_values(self, item) -> bool:
         if not clean_optional_text(getattr(item, "ingredient_name", None)):
@@ -1355,12 +1401,12 @@ class EmailIngestionService:
 
     def _classify_document(self, filename: str, ext: str, text: str | None, context_text: str | None = None):
         ext_lower = ext.lower()
-        if ext_lower != ".pdf":
+        if ext_lower not in CLASSIFIABLE_DOCUMENT_EXTENSIONS:
             return DocumentClassification(CATALOGUE, 0.95, None)
         return classify_document(filename, ext, text, context_text)
 
     def _is_certificate_pdf(self, filename: str, ext: str, text: str | None = None) -> bool:
-        if ext.lower() != ".pdf":
+        if ext.lower() not in CLASSIFIABLE_DOCUMENT_EXTENSIONS:
             return False
         return self._classify_document(filename, ext, text).category == CERTIFICATE
 
@@ -1419,10 +1465,23 @@ class EmailIngestionService:
                 continue
             seen_items.add(key)
             items.append(item)
-        unmatched_refs = list(unique_refs)
+        pairable_refs: list[dict[str, str]] = []
+        for ref in unique_refs:
+            material_name = self._certificate_material_name(ref)
+            if not material_name:
+                logger.info(
+                    "Skipping certificate PDF %s: no item name found for pairing",
+                    ref.get("name", "Certificate PDF"),
+                )
+                continue
+            pairable = dict(ref)
+            pairable["material_hint"] = material_name
+            pairable_refs.append(pairable)
+
+        unmatched_refs = list(pairable_refs)
         if items:
             for item in items:
-                matches = [ref for ref in unique_refs if self._certificate_matches_item(ref, item)]
+                matches = [ref for ref in pairable_refs if self._certificate_matches_item(ref, item)]
                 if matches:
                     self._merge_item_certificate_refs(item, matches)
                     for m in matches:
@@ -1432,14 +1491,12 @@ class EmailIngestionService:
         if not unmatched_refs:
             return
 
-        logger.info(
-            "%s certificate ref(s) unmatched to existing items for supplier=%s tenant=%s; creating new item table entries with country of origin",
-            len(unmatched_refs),
-            getattr(supplier, "email_domain", getattr(supplier, "id", "unknown")),
-            catalog_email.tenant_id,
-        )
         for ref in unmatched_refs:
-            self._create_catalog_item_from_certificate(catalog_email, supplier, ref)
+            logger.info(
+                "Skipping certificate PDF %s: item name %r did not match any catalogue row",
+                ref.get("name", "Certificate PDF"),
+                ref.get("material_hint"),
+            )
 
     def _create_catalog_item_from_certificate(
         self,
@@ -1512,10 +1569,10 @@ class EmailIngestionService:
         return new_item
 
     def _certificate_matches_item(self, certificate_ref: dict[str, str], item: CatalogItem) -> bool:
-        cert_text = self._canonical_match_text(
-            f"{certificate_ref.get('name', '')} {certificate_ref.get('type', '')} "
-            f"{certificate_ref.get('material_hint', '')} {certificate_ref.get('match_text', '')}"
-        )
+        material_name = self._certificate_material_name(certificate_ref)
+        if not material_name:
+            return False
+        cert_text = self._canonical_match_text(material_name)
         item_text = self._canonical_match_text(
             f"{item.ingredient_name} {(item.raw_payload or {}).get('specification', '')}"
         )
@@ -1531,8 +1588,35 @@ class EmailIngestionService:
             return True
         if any(len(token) >= 6 and token in cert_text for token in item_tokens):
             return True
-        material_hint = self._canonical_match_text(certificate_ref.get("material_hint", ""))
+        material_hint = self._canonical_match_text(material_name)
         return bool(material_hint and (material_hint in item_text or item_text in material_hint))
+
+    def _certificate_material_name(self, certificate_ref: dict[str, str]) -> str | None:
+        material_hint = clean_optional_text(certificate_ref.get("material_hint"))
+        if material_hint:
+            return self._clean_certificate_material_name(material_hint)
+
+        from backend.app.services.document_classifier import _material_hint
+
+        return self._clean_certificate_material_name(
+            _material_hint(certificate_ref.get("name", ""), certificate_ref.get("match_text", ""))
+        )
+
+    def _clean_certificate_material_name(self, value: str | None) -> str | None:
+        cleaned = clean_optional_text(value)
+        if not cleaned:
+            return None
+        cleaned = re.sub(r"\.[A-Za-z0-9]+$", "", cleaned)
+        cleaned = re.sub(r"[_-]+", " ", cleaned)
+        cleaned = re.sub(
+            r"(?i)\b(?:certificate of analysis|certificate|cert|coa|analysis|report|pdf|scan|copy|doc|document)\b",
+            " ",
+            cleaned,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_:.,")
+        if len(cleaned) < 3:
+            return None
+        return cleaned[:120]
 
     def _merge_item_certificate_refs(self, item: CatalogItem, refs: list[dict[str, str]]) -> None:
         raw_payload = dict(item.raw_payload or {})

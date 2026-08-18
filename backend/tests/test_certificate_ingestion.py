@@ -220,7 +220,7 @@ class CertificateIngestionTest(unittest.TestCase):
         self.assertEqual(certs[0].get("name"), "L-Carnitine-COA.pdf")
         self.assertEqual(catalog_emails[0].processing_status, "completed")
 
-    def test_unmatched_certificate_creates_new_catalog_item_entry_with_country(self) -> None:
+    def test_unmatched_certificate_does_not_create_catalog_item_entry(self) -> None:
         added_items = []
 
         class FakeDB:
@@ -258,15 +258,50 @@ class CertificateIngestionTest(unittest.TestCase):
 
         service._attach_certificate_refs(catalog_email, supplier, cert_refs)
 
-        self.assertEqual(len(added_items), 1)
-        new_item = added_items[0]
-        self.assertEqual(new_item.ingredient_name, "Zinc Gluconate")
-        self.assertEqual(new_item.supplier_id, supplier.id)
-        self.assertIsNotNone(new_item.raw_payload)
-        self.assertEqual(new_item.raw_payload.get("country_of_origin"), "Germany")
-        certs = new_item.raw_payload.get("certificate_pdfs", [])
-        self.assertEqual(len(certs), 1)
-        self.assertEqual(certs[0].get("url"), "https://example.supabase.co/storage/v1/object/public/catalog-pdfs/COA_Zinc_Gluconate.pdf")
+        self.assertEqual(len(added_items), 0)
+
+    def test_certificate_without_material_name_is_not_saved(self) -> None:
+        existing_item = CatalogItem(
+            id=uuid4(),
+            tenant_id=uuid4(),
+            supplier_id=uuid4(),
+            ingredient_name="Zinc Gluconate",
+            raw_payload={},
+        )
+
+        class FakeDB:
+            def query(self, model):
+                return self
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return [existing_item]
+
+            def add(self, item):
+                existing_item.raw_payload = getattr(item, "raw_payload", existing_item.raw_payload)
+
+        service = object.__new__(EmailIngestionService)
+        service.db = FakeDB()
+        service._dedupe_certificate_refs = lambda refs: refs
+
+        catalog_email = SimpleNamespace(id=uuid4(), tenant_id=existing_item.tenant_id)
+        supplier = SimpleNamespace(id=existing_item.supplier_id, email_domain="supplier.com", country="Germany")
+
+        cert_refs = [
+            {
+                "name": "COA.pdf",
+                "url": "https://example.supabase.co/storage/v1/object/public/catalog-pdfs/COA.pdf",
+                "storage_path": "certificates/COA.pdf",
+                "type": "Certificate of Analysis",
+                "match_text": "Certificate of Analysis\nBatch No: ZG-1\nAssay: 99%",
+            }
+        ]
+
+        service._attach_certificate_refs(catalog_email, supplier, cert_refs)
+
+        self.assertNotIn("certificate_pdfs", existing_item.raw_payload)
 
     def test_matched_certificate_attaches_to_existing_catalog_item(self) -> None:
         merged_items = []
@@ -317,7 +352,71 @@ class CertificateIngestionTest(unittest.TestCase):
         service._attach_certificate_refs(catalog_email, supplier, cert_refs)
 
         self.assertEqual(len(merged_items), 1)
-        self.assertEqual(existing_item.raw_payload.get("certificate_pdfs"), cert_refs)
+        certs = existing_item.raw_payload.get("certificate_pdfs")
+        self.assertEqual(certs[0]["name"], "COA_Ascorbic_Acid.pdf")
+        self.assertEqual(certs[0]["material_hint"], "Ascorbic Acid")
+
+    def test_multiple_certificates_attach_to_matching_body_items_only(self) -> None:
+        tenant_id = uuid4()
+        supplier_id = uuid4()
+        items = [
+            CatalogItem(id=uuid4(), tenant_id=tenant_id, supplier_id=supplier_id, ingredient_name="Thiamine Mononitrate", raw_payload={}),
+            CatalogItem(id=uuid4(), tenant_id=tenant_id, supplier_id=supplier_id, ingredient_name="Riboflavin", raw_payload={}),
+            CatalogItem(id=uuid4(), tenant_id=tenant_id, supplier_id=supplier_id, ingredient_name="Nicotinamide", raw_payload={}),
+        ]
+
+        class FakeDB:
+            def query(self, model):
+                return self
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return items
+
+            def add(self, item):
+                pass
+
+        service = object.__new__(EmailIngestionService)
+        service.db = FakeDB()
+
+        catalog_email = SimpleNamespace(id=uuid4(), tenant_id=tenant_id)
+        supplier = SimpleNamespace(id=supplier_id, email_domain="supplier.com", country="China")
+        cert_refs = [
+            {
+                "name": "COA_Thiamine_Mononitrate.pdf",
+                "url": "https://example.supabase.co/storage/v1/object/public/catalog-pdfs/COA_Thiamine_Mononitrate.pdf",
+                "type": "Certificate of Analysis",
+                "material_hint": "Thiamine Mononitrate",
+                "match_text": "Product: Thiamine Mononitrate\nAssay: 99%",
+            },
+            {
+                "name": "COA_Riboflavin.pdf",
+                "url": "https://example.supabase.co/storage/v1/object/public/catalog-pdfs/COA_Riboflavin.pdf",
+                "type": "Certificate of Analysis",
+                "material_hint": "Riboflavin",
+                "match_text": "Product: Riboflavin\nAssay: 98%",
+            },
+            {
+                "name": "COA_Myo_Inositol.pdf",
+                "url": "https://example.supabase.co/storage/v1/object/public/catalog-pdfs/COA_Myo_Inositol.pdf",
+                "type": "Certificate of Analysis",
+                "material_hint": "Myo-Inositol",
+                "match_text": "Product: Myo-Inositol\nAssay: 99%",
+            },
+        ]
+
+        service._attach_certificate_refs(catalog_email, supplier, cert_refs)
+
+        thiamine_certs = items[0].raw_payload.get("certificate_pdfs", [])
+        riboflavin_certs = items[1].raw_payload.get("certificate_pdfs", [])
+        nicotinamide_certs = items[2].raw_payload.get("certificate_pdfs", [])
+        self.assertEqual(len(thiamine_certs), 1)
+        self.assertEqual(thiamine_certs[0]["name"], "COA_Thiamine_Mononitrate.pdf")
+        self.assertEqual(len(riboflavin_certs), 1)
+        self.assertEqual(riboflavin_certs[0]["name"], "COA_Riboflavin.pdf")
+        self.assertEqual(nicotinamide_certs, [])
 
     def test_document_classifier_detects_various_certificate_filenames_and_contexts(self) -> None:
         from backend.app.services.document_classifier import CERTIFICATE, classify_document
@@ -373,6 +472,11 @@ class CertificateIngestionTest(unittest.TestCase):
             ".pdf",
             "Certificate of Analysis\nBatch No: ZG-2026-17\nAssay: 99.4%",
         )
+        docx_doc = service._classify_document(
+            "COA_Zinc_Gluconate.docx",
+            ".docx",
+            "Certificate of Analysis\nBatch No: ZG-2026-17\nAssay: 99.4%",
+        )
         image_doc = service._classify_document(
             "COA_Zinc_Gluconate.png",
             ".png",
@@ -385,6 +489,7 @@ class CertificateIngestionTest(unittest.TestCase):
         )
 
         self.assertEqual(pdf_doc.category, CERTIFICATE)
+        self.assertEqual(docx_doc.category, CERTIFICATE)
         self.assertEqual(image_doc.category, CATALOGUE)
         self.assertEqual(spreadsheet_doc.category, CATALOGUE)
         self.assertFalse(service._is_certificate_pdf("COA_Zinc_Gluconate.png", ".png", image_doc.category))

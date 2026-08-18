@@ -43,7 +43,7 @@ def clean_optional_text(value: object) -> str | None:
 class ExtractedCatalogItem(BaseModel):
     ingredient_name: str
     price_per_unit: float | None = None
-    currency: str = "INR"
+    currency: str = ""
     available_qty: float | None = None
     unit: str | None = None
     valid_until: datetime | None = None
@@ -105,7 +105,7 @@ class ExtractedCatalogItem(BaseModel):
     @classmethod
     def validate_currency(cls, v):
         cleaned = clean_optional_text(v)
-        return cleaned.upper() if cleaned else "INR"
+        return cleaned.upper() if cleaned else ""
 
 
 

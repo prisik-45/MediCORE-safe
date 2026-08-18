@@ -110,6 +110,36 @@ class EmailIngestionSearchCriteriaTest(unittest.TestCase):
         self.assertEqual(catalog_email.duplicate_count, 1)
         self.assertEqual(len(added), 1)
 
+    def test_store_catalog_items_clears_price_without_price_evidence(self) -> None:
+        added = []
+        service = object.__new__(EmailIngestionService)
+        service.db = SimpleNamespace(add=lambda item: added.append(item))
+        service._existing_supplier_items_by_identity = lambda *args, **kwargs: {}
+        catalog_email = SimpleNamespace(id="email-id", tenant_id="tenant-id", duplicate_count=0, received_at=datetime(2026, 8, 19, tzinfo=UTC))
+        supplier = SimpleNamespace(id="supplier-id", tenant_id="tenant-id", email_domain="supplier.test")
+        text = "RM | Volum (KG)\nBiotin (Chemical Substance) Biotin | 0.05"
+        item = ExtractedCatalogItem(
+            ingredient_name="Biotin",
+            price_per_unit=0.05,
+            currency="INR",
+            available_qty=0.05,
+            unit="kg",
+            notes="source='Biotin (Chemical Substance) Biotin | 0.05'",
+        )
+
+        stored = service._store_catalog_items(
+            catalog_email,
+            supplier,
+            [item],
+            text,
+            tenant_id="tenant-id",
+        )
+
+        self.assertEqual(stored, 1)
+        self.assertIsNone(added[0].price_per_unit)
+        self.assertEqual(added[0].currency, "")
+        self.assertEqual(float(added[0].available_qty), 0.05)
+
     def test_email_body_preview_prefers_clean_plain_text_without_duplicate_html(self) -> None:
         message = EmailMessage()
         message["Subject"] = "LinkedIn update"
@@ -1012,7 +1042,7 @@ class EmailIngestionSearchCriteriaTest(unittest.TestCase):
         self.assertTrue(service._is_certificate_pdf("Vitamin-D3-COA.pdf", ".pdf", "Certificate of Analysis"))
         self.assertTrue(service._is_certificate_pdf("supplier-quality.pdf", ".pdf", "ISO 9001 Certificate"))
         self.assertFalse(service._is_certificate_pdf("July catalogue.pdf", ".pdf", "price list inventory"))
-        self.assertFalse(service._is_certificate_pdf("COA.docx", ".docx", "Certificate of Analysis"))
+        self.assertTrue(service._is_certificate_pdf("COA.docx", ".docx", "Certificate of Analysis"))
 
     def test_certificate_refs_are_deduped_and_keep_storage_path(self) -> None:
         service = EmailIngestionService(db=SimpleNamespace())

@@ -83,7 +83,7 @@ PRICE_UPDATE_SENTENCE_PATTERNS = (
         re.IGNORECASE,
     ),
 )
-HEADER_UNIT_PATTERN = re.compile(r"(?:quantity|qty|stock|available)\s*(?:\(\s*|\bin\s+)?(?P<unit>[A-Za-z]+)\s*\)?", re.IGNORECASE)
+HEADER_UNIT_PATTERN = re.compile(r"(?:quantity|qty|stock|available|vol(?:ume|um)?)\s*(?:\(\s*|\bin\s+)?(?P<unit>[A-Za-z]+)\s*\)?", re.IGNORECASE)
 HEADER_CURRENCY_PATTERN = re.compile(r"(?:price|rate|quote|cost|unit price)\s*\(\s*(?P<currency>[A-Z$â‚¹â‚¬]+)\s*\)", re.IGNORECASE)
 HEADER_MOQ_UNIT_PATTERN = re.compile(r"(?:MOQ|M\.?O\.?Q\.?|minimum order|min qty|minimum quantity|packing|packaging|pack size|pack)\s*(?:\(\s*|\bin\s+)?(?P<unit>[A-Za-z]+)\s*\)?", re.IGNORECASE)
 HEADER_LEAD_TIME_UNIT_PATTERN = re.compile(r"(?:lead\s*time|lead|delivery|dispatch|delivery\s*time)\s*(?:\(\s*|\bin\s+)?(?P<unit>days?|weeks?|months?)\s*\)?", re.IGNORECASE)
@@ -556,14 +556,15 @@ def _parse_generic_table(text: str, context: dict[str, str | None]) -> list[Extr
         if not unit and price_unit:
             unit = price_unit
 
-        currency = _currency_code(
+        currency_source = (
             _cell(parts, header_map.get("currency"))
             or _currency_from_text(raw_price_cell)
             or str(price_header_meta.get("currency") or "")
             or _currency_from_text(price_header_text)
-            or context.get("currency")
-            or ("USD" if price_unit else "INR")
+            or (context.get("currency") if price is not None else "")
+            or ("USD" if price is not None and price_unit else "")
         )
+        currency = _currency_code(currency_source) if currency_source else ""
         raw_moq = _cell(parts, header_map.get("moq"))
         moq = _number_from_text(raw_moq) if "moq" in header_map else None
         moq_header_text = header[header_map["moq"]] if header and "moq" in header_map else ""
@@ -723,8 +724,8 @@ def _trim_post_table_text_from_row(parts: list[str], expected_columns: int) -> l
 def _header_map(parts: list[str]) -> dict[str, int]:
     aliases = [
         ("price", ("price", "rate", "quote", "cost", "unit price", "price/unit", "rate/unit", "fob", "cif", "exw", "cnf", "c&f", "ddp", "dap", "$/kg", "/kg", "$/g")),
-        ("name", ("product name", "item name", "ingredient name", "material name", "chemical name", "product", "item", "ingredient", "chemical", "material", "medicine", "api", "name", "particulars", "details", "title", "drug", "compound", "article")),
-        ("qty", ("qty", "quantity", "quantities", "stock", "available", "availability", "balance", "volume", "qnty", "q'ty", "count", "batch size", "lot size", "offer qty", "supplied qty", "order qty", "total qty", "stock qty", "avail qty", "qty avail")),
+        ("name", ("product name", "item name", "ingredient name", "material name", "chemical name", "raw material", "product", "item", "ingredient", "chemical", "material", "medicine", "api", "name", "rm", "particulars", "details", "title", "drug", "compound", "article")),
+        ("qty", ("qty", "quantity", "quantities", "stock", "available", "availability", "balance", "volume", "volum", "vol", "qnty", "q'ty", "count", "batch size", "lot size", "offer qty", "supplied qty", "order qty", "total qty", "stock qty", "avail qty", "qty avail")),
         ("unit", ("unit of measure", "pack unit", "pkg unit", "uom", "unit")),
         ("specification", ("product specification description", "specification description", "specification", "spec", "description", "assay", "purity", "grade", "content", "quality", "standard")),
         ("currency", ("currency", "curr")),
@@ -805,7 +806,7 @@ def _header_cell_metadata(header: str | None) -> dict[str, str | None]:
         field = "moq"
     elif re.search(r"\b(?:lead|delivery|dispatch|shipping|ship\s*time|turnaround)\b", lowered):
         field = "lead_time"
-    elif re.search(r"\b(?:qty|quantity|stock|available|availability|balance|volume|offer\s*qty|total\s*qty)\b", lowered):
+    elif re.search(r"\b(?:qty|quantity|stock|available|availability|balance|vol(?:ume|um)?|offer\s*qty|total\s*qty)\b", lowered):
         field = "qty"
     elif re.search(r"\b(?:specification|spec|description|assay|purity|grade|content|quality|standard)\b", lowered):
         field = "specification"
@@ -919,7 +920,7 @@ def _currency_code(raw: str | None) -> str:
         return "INR"
     if value in {"€", "EUR"}:
         return "EUR"
-    return value or "INR"
+    return value or ""
 
 
 def _currency_from_text(raw: str | None) -> str | None:

@@ -50,6 +50,26 @@ class TestCsvXlsxExtraction(unittest.TestCase):
         self.assertEqual(items[3].unit, "kg")
         self.assertEqual(items[3].price_per_unit, 3.10)
 
+    def test_rm_volume_kg_table_maps_volume_to_quantity_not_price(self):
+        table_text = """RM,Volum (KG)
+Thiamine (Chemical Substance) Thiamine mononitrate,25.200
+Riboflavin (Chemical Substance) Riboflavin,25.20
+Biotin (Chemical Substance) Biotin,0.05
+"""
+        items = parse_catalog_table_text(table_text)
+
+        self.assertEqual(len(items), 3)
+        by_name = {item.ingredient_name: item for item in items}
+        self.assertEqual(by_name["Biotin (Chemical Substance) Biotin"].available_qty, 0.05)
+        self.assertEqual(by_name["Biotin (Chemical Substance) Biotin"].unit, "kg")
+        self.assertIsNone(by_name["Biotin (Chemical Substance) Biotin"].price_per_unit)
+        self.assertEqual(by_name["Biotin (Chemical Substance) Biotin"].currency, "")
+        self.assertIn("original_quantity=0.05 kg", by_name["Biotin (Chemical Substance) Biotin"].notes or "")
+
+    def test_volume_kg_header_typo_is_not_mapped_as_price(self):
+        self.assertEqual(_header_map(["RM", "Volume (KG)"]), {"name": 0, "qty": 1})
+        self.assertEqual(_header_map(["RM", "Volum (KG)"]), {"name": 0, "qty": 1})
+
     def test_quantity_header_unit_is_added_to_numeric_only_cells(self):
         csv_text = """Product Name,Specification,Quantity(KG),Price (USD)
 "Marigold Extract","Lutein 20%","446.02","11.00"
@@ -510,8 +530,8 @@ Paracetamol 500mg,10000 kg
 
         self.assertEqual(len(items), 2)
         self.assertIsNone(items[0].price_per_unit)
-        self.assertIn("original_price=INR On request", items[0].notes or "")
-        self.assertIn("original_price=INR Negotiable", items[1].notes or "")
+        self.assertIn("original_price=On request", items[0].notes or "")
+        self.assertIn("original_price=Negotiable", items[1].notes or "")
 
     def test_structured_markdown_table_does_not_call_llm_fallback(self):
         class FailingLlm:
