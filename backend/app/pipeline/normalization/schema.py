@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 BlockType = Literal["text", "table", "figure"]
-EngineName = Literal["pymupdf", "rapidocr", "img2table", "mammoth", "openpyxl", "xlrd"]
+EngineName = Literal["pymupdf", "rapidocr", "img2table", "mammoth", "openpyxl", "xlrd", "openrouter-vision"]
 SourceType = Literal["pdf", "image", "docx", "xlsx"]
 
 

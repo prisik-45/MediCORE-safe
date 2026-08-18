@@ -4,6 +4,8 @@ Owned by: pipeline/ingestion/loader_pdf.py
 """
 
 import io
+import logging
+import math
 from pathlib import Path
 from typing import Generator
 import fitz
@@ -11,6 +13,8 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 25_000_000
 MAX_SAFE_PIXELS_PER_PAGE = 25_000_000
+
+logger = logging.getLogger(__name__)
 
 
 class PDFDocumentWrapper:
@@ -27,6 +31,16 @@ class PDFDocumentWrapper:
     def render_page_image(self, page_num_1indexed: int, target_dpi: int = 300) -> Image.Image:
         page = self.get_page(page_num_1indexed)
         scale = target_dpi / 72.0
+        page_pixels_at_unit_scale = max(1.0, float(page.rect.width * page.rect.height))
+        max_safe_scale = math.sqrt(MAX_SAFE_PIXELS_PER_PAGE / page_pixels_at_unit_scale)
+        if scale > max_safe_scale:
+            logger.warning(
+                "PDF page %s render DPI reduced from %s to %.1f to stay under pixel safety limit",
+                page_num_1indexed,
+                target_dpi,
+                max_safe_scale * 72.0,
+            )
+            scale = max_safe_scale
         matrix = fitz.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         if pix.width * pix.height > MAX_SAFE_PIXELS_PER_PAGE:

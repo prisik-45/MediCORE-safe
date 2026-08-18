@@ -21,6 +21,7 @@ from backend.app.pipeline.normalization.merge import create_document_page_result
 from backend.app.pipeline.normalization.schema import DocumentPageResult, ExtractedBlock, ExtractionResult, SourceType
 from backend.app.pipeline.preprocessing.preprocess import normalize_image_resolution
 from backend.app.pipeline.validation.confidence import validate_and_retry_low_confidence_blocks
+from backend.app.services.vision_extraction import extract_image_text_with_openrouter_vision
 
 logger = logging.getLogger(__name__)
 
@@ -78,16 +79,25 @@ def _process_pdf_document(path: Path, budget: ExtractionBudget | None = None) ->
             elif classification.page_type == "scanned":
                 page_img = pdf_wrapper.render_page_image(page_num, target_dpi=default_config.target_dpi)
                 norm_img = normalize_image_resolution(page_img)
-                ocr_blocks = extract_text_with_ocr(norm_img)
-                ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
-                table_blocks = extract_tables_from_image(norm_img)
+                vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                if vision_block:
+                    ocr_blocks = [vision_block]
+                else:
+                    ocr_blocks = extract_text_with_ocr(norm_img)
+                    ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
+                    table_blocks = extract_tables_from_image(norm_img)
             else:  # mixed page
                 native_blocks = extract_native_text(fitz_page)
                 page_img = pdf_wrapper.render_page_image(page_num, target_dpi=default_config.target_dpi)
                 norm_img = normalize_image_resolution(page_img)
-                ocr_blocks = extract_text_with_ocr(norm_img)
-                ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
-                table_blocks = extract_tables_from_pdf_page(fitz_page) or extract_tables_from_image(norm_img)
+                vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                if vision_block:
+                    ocr_blocks = [vision_block]
+                    table_blocks = extract_tables_from_pdf_page(fitz_page)
+                else:
+                    ocr_blocks = extract_text_with_ocr(norm_img)
+                    ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
+                    table_blocks = extract_tables_from_pdf_page(fitz_page) or extract_tables_from_image(norm_img)
 
             merged = merge_page_blocks(
                 native_blocks=native_blocks,
@@ -106,9 +116,14 @@ def _process_image_document(path: Path, budget: ExtractionBudget | None = None) 
     img_wrapper = load_image(path)
     norm_img = normalize_image_resolution(img_wrapper.image)
 
-    ocr_blocks = extract_text_with_ocr(norm_img)
-    ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
-    table_blocks = extract_tables_from_image(norm_img)
+    vision_block = _extract_vision_block(norm_img, path.name)
+    if vision_block:
+        ocr_blocks = [vision_block]
+        table_blocks: list[ExtractedBlock] = []
+    else:
+        ocr_blocks = extract_text_with_ocr(norm_img)
+        ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
+        table_blocks = extract_tables_from_image(norm_img)
 
     merged = merge_page_blocks(
         native_blocks=[],
@@ -119,6 +134,19 @@ def _process_image_document(path: Path, budget: ExtractionBudget | None = None) 
 
     result.pages.append(create_document_page_result(page_num=1, source="image", blocks=merged))
     return result
+
+
+def _extract_vision_block(image, source_name: str) -> ExtractedBlock | None:
+    text = extract_image_text_with_openrouter_vision(image, source_name=source_name)
+    if not text:
+        return None
+    return ExtractedBlock(
+        type="text",
+        bbox=[0.0, 0.0, 0.0, 0.0],
+        content=text,
+        confidence=0.9,
+        engine="openrouter-vision",
+    )
 
 
 def _process_docx_document(path: Path, budget: ExtractionBudget | None = None) -> ExtractionResult:

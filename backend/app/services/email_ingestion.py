@@ -2586,6 +2586,12 @@ class EmailIngestionService:
         from PIL import Image
 
         try:
+            from backend.app.services.vision_extraction import extract_image_text_with_openrouter_vision
+
+            vision_text = extract_image_text_with_openrouter_vision(file_path, source_name=file_path.name)
+            if vision_text:
+                return "[OPENROUTER VISION OCR]\n" + vision_text
+
             grid_table_text = ""
             try:
                 from backend.app.services.image_grid_extractor import extract_grid_table_from_image

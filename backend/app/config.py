@@ -40,6 +40,7 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = Field(default="", repr=False)
     openrouter_model: str = "openai/gpt-4o-mini"
+    openrouter_vision_model: str = "nvidia/nemotron-3.5-lightning:free"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_site_url: str = ""
     openrouter_app_name: str = "MediCORE"

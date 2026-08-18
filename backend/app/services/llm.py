@@ -428,55 +428,6 @@ class ModelRouterClient:
         return extracted
 
     def _extract_catalog_items_chunk(self, pdf_text: str, reference_date: datetime | None = None) -> list[ExtractedCatalogItem]:
-        date_context = ""
-        if reference_date:
-            date_context = f"\n- Reference Date Context: The email or document was received on {reference_date.strftime('%Y-%m-%d')}. Use this exact date to resolve relative validity expressions (e.g. 'valid for 15 days' resolves to valid_until='{reference_date.strftime('%Y-%m-%d')}' + 15 days, 'valid until end of month' resolves to the end of the current month, etc.).\n"
-
-        system = (
-            "You are an expert AI parser for pharmaceutical and chemical supplier catalogs. "
-            "Your task is to analyze the provided text (which could be a structured table, a conversational email body, or an unstructured list/paragraph) "
-            "and extract all catalog items into a strict JSON structure. "
-            "Return only valid minified JSON with a single key 'items' mapping to an array of catalog items. "
-            "Do not use markdown fences, comments, trailing commas, or explanatory text.\n\n"
-            "Each catalog item in the array MUST contain the following fields:\n"
-            "- ingredient_name: The raw name of the chemical, ingredient, or medicine (e.g., 'Citric Acid Anhydrous', 'Paracetamol API', 'Aspirin USP')\n"
-            "- specification: The exact product specification/description/grade/purity/assay/content from the row if present, otherwise null. "
-            "Examples: '97% Powder', 'Berberine Extract 20:1', 'Fe2+: 20.0%-23.7%, Nitrogen: 10.0%-12.0%'. Do not merge this into ingredient_name.\n"
-            "- price_per_unit: The numeric price from a price/rate column or phrase only. "
-            "Never copy the quantity value into price_per_unit. Preserve the exact decimal value visible in the source; do not round. If a price range is given, use the visible lower bound and put the full original range in notes. "
-            "If no real price/rate is visible for an item, use null instead of guessing; still extract the item if the product name is visible.\n"
-            "- currency: The quoted transaction currency as a currency code. '$' or Price(USD) means 'USD'; "
-            "'₹', 'Rs', 'Rupees', or Price(INR) means 'INR'; '€' means 'EUR'. Do not convert values between currencies.\n"
-            "- available_qty: The numeric stock/available quantity from a Quantity, Qty, Qty Avail, or Quantity(KG) column. "
-            "For example, in 'Quantity(KG)=9.99' and 'Price(USD)=$10.50/kg', available_qty is 9.99 and price_per_unit is 10.50. "
-            "Preserve the exact decimal value visible in the source; do not round. If quantity is not visible, use null. Never output 0 unless the source explicitly says zero.\n"
-            "- unit: The quantity/price unit (e.g., 'kg', 'g', 'litre', 'tablet', 'capsule', 'pack', 'drum'). Normalize units like 'kilograms', 'kgs' to 'kg'.\n"
-            "- valid_until: An ISO 8601 date string (e.g. '2026-12-31') if an offer validity or expiry date is mentioned, otherwise null.\n"
-            "- lead_time_days: An integer only when the source gives one exact lead time (e.g., '5 days'). Parse expressions like '1 week' to 7, 'next day' to 1. If the source gives a range like '40-50 days' or '40 to 50 days', use null here.\n"
-            "- lead_time_text: The exact source lead-time phrase when present, especially ranges like '40-50 days'. If not mentioned, use null.\n"
-            "- moq: A numeric float representing the Minimum Order Quantity. Extract hidden MOQ text inside other columns, "
-            "such as '4.66 MOQ:25kg' -> available_qty=4.66, moq=25.0, unit='kg'. If not mentioned, use null.\n"
-            "- notes: Any extra specifications, purity levels, packaging details, original price strings, Incoterms, "
-            "packing terms, or conditions (e.g., 'CIF Vancouver $6.00/kg', '99% purity', '25kg packing', 'Payment: 30 days').\n\n"
-            "CRITICAL TABLE MAPPING RULES:\n"
-            "1. Read column headers before values. Values under Quantity/Qty columns are quantities, not prices, even if they look like decimals.\n"
-            "2. Values under Price/Rate columns are prices. If the header says Price(USD), use currency='USD' even when the row only says '10.50/kg'.\n"
-            "3. Preserve the original quoted currency and commercial terms in notes, but keep price_per_unit numeric.\n"
-            "4. Treat 'NA' prices as unavailable and set price_per_unit=null unless a real numeric price is present elsewhere in the same row.\n"
-            "5. No hallucination: every ingredient, price, quantity, unit, MOQ, lead time, and date must be directly supported by text visible in this chunk. "
-            "Put the exact source row/phrase for each item into notes as source='...'. Do not infer missing numeric values, do not convert units/currencies, and do not round decimal values.\n\n"
-            "CRITICAL INSTRUCTIONS FOR UNSTRUCTURED / CONVERSATIONAL TEXT:\n"
-            f"1. Conversational Emails: If the text is an email conversation, locate all mentions of products, prices, quantities, and terms, and map them to the schema.{date_context}\n"
-            "2. Implicit Packaging: If the text says 'Rs 3000 per 25kg bag', normalize this to a single item with price_per_unit=3000, unit='bag' or price_per_unit=120, unit='kg', depending on how the price is stated, but map it logically.\n"
-            "3. Purity & Grades: Keep grades (e.g. 'IP', 'USP', 'Food Grade') and CAS numbers in the ingredient_name and notes.\n"
-            "4. Volume / Tiered Pricing: If the email lists multiple price tiers based on quantity (e.g., '$5/kg for 100kg, or $4/kg for 500kg'), extract EACH tier as a separate catalog item in the array, setting the price_per_unit, moq, and available_qty accordingly.\n"
-            "5. CAS Registry Numbers: Extract CAS numbers (e.g. 'CAS 50-78-2') and specify them clearly in the 'notes' field (e.g. 'CAS: 50-78-2').\n"
-            "6. Incoterms & Conditions: Extract Incoterms (FOB, CIF, EXW, DDP, CFR) or shipping details (e.g. 'FOB Shanghai', 'origin: India') and save them in 'notes'.\n"
-            "7. Thoroughness: Extract EVERY single product listed in this chunk. Do not summarize or stop early. "
-            "If there are 20 visible rows, return all 20 rows; use null for missing commercial fields.\n"
-            "8. OCR Robustness: Correct obvious OCR confusions only when context is clear, e.g. O/0 in numbers, l/1 in quantities, broken table spacing. "
-            "If a row is ambiguous, omit that row instead of guessing."
-        )
         system = self._catalogue_extraction_system_prompt(reference_date)
         safe_user_prompt = wrap_llm_untrusted_content(pdf_text)
         payload = self._json_chat(system, safe_user_prompt)
@@ -493,17 +444,16 @@ class ModelRouterClient:
         if reference_date:
             date_context = f" Reference date: {reference_date.strftime('%Y-%m-%d')}; resolve relative validity dates from it."
         return (
-            "Extract supplier catalogue items from the user text. Return only minified JSON: "
-            "{\"items\":[{ingredient_name,specification,price_per_unit,currency,available_qty,unit,valid_until,lead_time_days,lead_time_text,moq,notes}]}.\n"
-            "Use null for missing values; no markdown; no guessed data. Extract every visible product and price tier. "
-            "ingredient_name is product/material name. specification is grade, purity, assay, content, CAS, or row description. "
-            "price_per_unit is numeric price only from price/rate text or columns; never use quantity as price. "
-            "currency: $/USD=USD, Rs/INR=INR, EUR=EUR, GBP=GBP. Do not convert currency or units. "
-            "available_qty is stock/quantity from Qty/Quantity columns. unit is kg/g/mg/l/ml/bag/pack/drum/etc. "
-            "moq is numeric minimum order quantity. lead_time_days only for one exact lead time; put ranges in lead_time_text. "
-            "valid_until is ISO date only when stated. Put source phrase, Incoterms, packing, origin, and original price strings in notes. "
-            "For tables, obey headers: quantity columns are not prices, and price columns are not quantities. "
-            "For emails, map product, price, MOQ, quantity, and terms from conversation text."
+            "Extract supplier catalogue rows. Output ONLY minified JSON shaped as "
+            "{\"items\":[{ingredient_name,specification,price_per_unit,currency,available_qty,unit,valid_until,lead_time_days,lead_time_text,moq,notes}]}."
+            " Keep prompt/output tokens low: no markdown, comments, explanations, repeated source text, or verbose notes. "
+            "Return every visible product and every price tier; use null when a field is absent; never invent, convert, or round values. "
+            "Fields: ingredient_name=product/material; specification=grade/purity/assay/content/CAS/row description; "
+            "price_per_unit=numeric price/rate only, never Qty; currency=$/USD=>USD, Rs/INR=>INR, EUR=>EUR, GBP=>GBP; "
+            "available_qty=stock/Qty/Quantity; unit=kg/g/mg/l/ml/bag/pack/drum/etc; moq=numeric MOQ; "
+            "valid_until=ISO date only if stated; lead_time_days=single exact duration only, ranges go in lead_time_text. "
+            "Tables: obey headers; Quantity columns are not prices, Price/Rate columns are not quantities, NA price=>null. "
+            "Emails/unstructured text: map products, prices, quantities, MOQ, packing, Incoterms/origin, terms; put only concise source evidence/terms in notes."
             f"{date_context}"
         )
 
