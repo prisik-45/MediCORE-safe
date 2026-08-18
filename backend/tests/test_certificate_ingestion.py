@@ -9,6 +9,7 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.app.models import CatalogEmail, CatalogItem, Supplier
+from backend.app.schemas import ExtractedCatalogItem
 from backend.app.services.document_classifier import CATALOGUE, CERTIFICATE, DocumentClassification
 from backend.app.services.email_ingestion import EmailIngestionService
 
@@ -387,6 +388,174 @@ class CertificateIngestionTest(unittest.TestCase):
         self.assertEqual(image_doc.category, CATALOGUE)
         self.assertEqual(spreadsheet_doc.category, CATALOGUE)
         self.assertFalse(service._is_certificate_pdf("COA_Zinc_Gluconate.png", ".png", image_doc.category))
+
+    def test_image_vision_json_bypasses_classifier_parser_and_llm(self) -> None:
+        tenant_id = uuid4()
+        supplier = Supplier(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            name="Image Supplier",
+            email_domain="image@example.com",
+            country="Unknown",
+        )
+        catalog_emails = []
+        stored_calls = []
+
+        class FakeQuery:
+            def filter(self, *args, **kwargs):
+                return self
+
+            def first(self):
+                return None
+
+        class FakeDB:
+            def query(self, model):
+                return FakeQuery()
+
+            def add(self, item):
+                if isinstance(item, CatalogEmail):
+                    catalog_emails.append(item)
+
+            def flush(self):
+                pass
+
+            def commit(self):
+                pass
+
+        service = object.__new__(EmailIngestionService)
+        service.db = FakeDB()
+        service.settings = SimpleNamespace(supabase_storage_bucket="catalog-pdfs")
+        service._existing_email_status = lambda raw_email_id, tenant_id=None: None
+        service._upsert_supplier = lambda sender, display_name=None, tenant_id=None: supplier
+        service._upload_file = lambda file_path, raw_email_id, mime_type: (
+            f"https://example.supabase.co/storage/v1/object/public/catalog-pdfs/{file_path.name}",
+            f"{raw_email_id}/{file_path.name}",
+        )
+        service._delete_uploaded_files = lambda object_paths: None
+        service._update_supplier_country = lambda supplier, *texts: None
+        service._extract_text_from_file = lambda *args, **kwargs: self.fail("image text fallback should not run")
+        service._classify_document = lambda *args, **kwargs: self.fail("non-PDF classifier should not run")
+        service._extract_items_from_text = lambda *args, **kwargs: self.fail("parser/LLM fallback should not run")
+        service._extract_catalogue_items_from_image = lambda file_path: [
+            ExtractedCatalogItem(
+                ingredient_name="Vitamin C",
+                price_per_unit=5.0,
+                currency="USD",
+                available_qty=100.0,
+                unit="kg",
+                notes="source='Vitamin C USD 5/kg Qty 100kg'",
+            )
+        ]
+
+        def fake_store(catalog_email, supplier, items, text, tenant_id=None, source_name=None):
+            stored_calls.append((items, text, source_name))
+            return len(items)
+
+        service._store_catalog_items = fake_store
+
+        message = EmailMessage()
+        message["From"] = "Image Supplier <image@example.com>"
+        message["Subject"] = "Image catalogue"
+        message["Date"] = datetime(2026, 8, 9, tzinfo=UTC).strftime("%a, %d %b %Y %H:%M:%S %z")
+        message.set_content("Attached catalogue image")
+
+        count = service._process_message(
+            message,
+            raw_email_id="image-email-1",
+            parse_targets=[
+                {
+                    "name": "catalogue.jpg",
+                    "payload": b"image-bytes",
+                    "ext": ".jpg",
+                    "mime_type": "image/jpeg",
+                    "is_body": False,
+                }
+            ],
+            tenant_id=tenant_id,
+        )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(catalog_emails[0].processing_status, "completed")
+        self.assertEqual(stored_calls[0][0][0].ingredient_name, "Vitamin C")
+        self.assertEqual(stored_calls[0][2], "catalogue.jpg")
+
+    def test_non_pdf_classifier_is_not_called_when_image_vision_falls_back(self) -> None:
+        tenant_id = uuid4()
+        supplier = Supplier(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            name="Fallback Supplier",
+            email_domain="fallback@example.com",
+            country="Unknown",
+        )
+
+        class FakeQuery:
+            def filter(self, *args, **kwargs):
+                return self
+
+            def first(self):
+                return None
+
+        class FakeDB:
+            def query(self, model):
+                return FakeQuery()
+
+            def add(self, item):
+                pass
+
+            def flush(self):
+                pass
+
+            def commit(self):
+                pass
+
+        service = object.__new__(EmailIngestionService)
+        service.db = FakeDB()
+        service.settings = SimpleNamespace(supabase_storage_bucket="catalog-pdfs")
+        service._existing_email_status = lambda raw_email_id, tenant_id=None: None
+        service._upsert_supplier = lambda sender, display_name=None, tenant_id=None: supplier
+        service._upload_file = lambda file_path, raw_email_id, mime_type: (
+            f"https://example.supabase.co/storage/v1/object/public/catalog-pdfs/{file_path.name}",
+            f"{raw_email_id}/{file_path.name}",
+        )
+        service._delete_uploaded_files = lambda object_paths: None
+        service._update_supplier_country = lambda supplier, *texts: None
+        service._extract_catalogue_items_from_image = lambda file_path: []
+        service._extract_text_from_file = lambda file_path, ext: "Vitamin C USD 5/kg source row"
+        service._classify_document = lambda *args, **kwargs: self.fail("non-PDF classifier should not run")
+        service._extract_items_from_text = lambda text, source_name, reference_date=None: [
+            ExtractedCatalogItem(
+                ingredient_name="Vitamin C",
+                price_per_unit=5.0,
+                currency="USD",
+                unit="kg",
+                notes="source='Vitamin C USD 5/kg source row'",
+            )
+        ]
+        service._store_catalog_items = lambda catalog_email, supplier, items, text, tenant_id=None, source_name=None: len(items)
+
+        message = EmailMessage()
+        message["From"] = "Fallback Supplier <fallback@example.com>"
+        message["Subject"] = "Fallback image catalogue"
+        message["Date"] = datetime(2026, 8, 9, tzinfo=UTC).strftime("%a, %d %b %Y %H:%M:%S %z")
+        message.set_content("Attached catalogue image")
+
+        count = service._process_message(
+            message,
+            raw_email_id="image-email-2",
+            parse_targets=[
+                {
+                    "name": "catalogue.jpg",
+                    "payload": b"image-bytes",
+                    "ext": ".jpg",
+                    "mime_type": "image/jpeg",
+                    "is_body": False,
+                }
+            ],
+            tenant_id=tenant_id,
+        )
+
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

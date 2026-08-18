@@ -32,7 +32,7 @@ class PdfExtractServiceTest(unittest.TestCase):
             with patch.object(Path, "is_file", return_value=True):
                 text = pdf_extract.extract_pdf_text("sample.pdf")
 
-        mock_proc.assert_called_once_with(Path("sample.pdf"))
+        mock_proc.assert_called_once_with(Path("sample.pdf"), use_vision_for_pdf_images=False)
         self.assertIn("Vitamin C | USD 5/kg", text)
 
     def test_extract_pdf_text_nonexistent_file_returns_empty(self) -> None:

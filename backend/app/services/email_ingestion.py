@@ -38,7 +38,7 @@ from backend.app.services.gmail_api import GmailApiClient
 from backend.app.services.llm import OpenRouterClient
 from backend.app.services.normalizer import normalize_item
 from backend.app.services.pdf_extract import extract_pdf_text
-from backend.app.schemas import clean_optional_text
+from backend.app.schemas import ExtractedCatalogItem, clean_optional_text
 from backend.app.security import validate_public_network_host
 from backend.app.services.sanitizer import sanitize_preview_text, wrap_llm_untrusted_content
 from backend.app.file_validator import (
@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTACHMENT_COUNT = 10
 RETRYABLE_EMAIL_STATUSES = ("failed", "error", "partial", "partially_processed")
+IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 
 SUPPLIER_INTENT_TERMS = (
     "catalog",
@@ -440,6 +441,32 @@ class EmailIngestionService:
                     file_path.write_bytes(payload)
                     uploaded_url, object_path = self._upload_file(file_path, raw_email_id, mime_type)
 
+                    if ext in IMAGE_ATTACHMENT_EXTENSIONS:
+                        image_items = self._extract_catalogue_items_from_image(file_path)
+                        if image_items:
+                            logger.info(
+                                "Image catalogue vision returned %s validated item(s); bypassing parser/LLM for %s",
+                                len(image_items),
+                                target_name,
+                            )
+                            uploaded_object_paths.append(object_path)
+                            if not catalog_email.pdf_url:
+                                catalog_email.pdf_url = uploaded_url
+                            image_text = self._catalogue_item_evidence_text(image_items)
+                            count += self._store_catalog_items(
+                                catalog_email,
+                                supplier,
+                                image_items,
+                                image_text,
+                                tenant_id=tenant_id,
+                                source_name=target_name,
+                            )
+                            continue
+                        logger.info(
+                            "Image catalogue vision returned no valid items for %s; falling back to text parser",
+                            target_name,
+                        )
+
                     try:
                         text = self._extract_text_from_file(file_path, ext)
                     except Exception as text_exc:
@@ -452,33 +479,38 @@ class EmailIngestionService:
                         country_contexts.append(text)
                         extracted_text_parts.append(text)
                     email_context = f"{catalog_email.subject or ''}\n{catalog_email.body_preview or ''}"
-                    classification = self._classify_document(target_name, ext, text, context_text=email_context)
-                    logger.info(
-                        "Classified document %s as %s confidence=%.2f",
-                        target_name,
-                        classification.category,
-                        classification.confidence,
-                    )
-
-                    if classification.category == CERTIFICATE:
-                        certificate_refs.append(
-                            {
-                                "name": target_name,
-                                "url": uploaded_url,
-                                "storage_path": object_path,
-                                "type": self._certificate_type(target_name, text),
-                                "match_text": text[:10000],
-                                "material_hint": classification.material_hint or "",
-                            }
+                    if ext == ".pdf":
+                        classification = self._classify_document(target_name, ext, text, context_text=email_context)
+                        logger.info(
+                            "Classified document %s as %s confidence=%.2f",
+                            target_name,
+                            classification.category,
+                            classification.confidence,
                         )
-                        logger.info("Stored certificate PDF %s for email id=%s", target_name, raw_email_id)
-                        continue
 
-                    if classification.category == OTHER:
-                        uploaded_object_paths.append(object_path)
-                        logger.info("Skipping non-catalogue document %s after classification", target_name)
-                        continue
+                        if classification.category == CERTIFICATE:
+                            certificate_refs.append(
+                                {
+                                    "name": target_name,
+                                    "url": uploaded_url,
+                                    "storage_path": object_path,
+                                    "type": self._certificate_type(target_name, text),
+                                    "match_text": text[:10000],
+                                    "material_hint": classification.material_hint or "",
+                                }
+                            )
+                            logger.info("Stored certificate PDF %s for email id=%s", target_name, raw_email_id)
+                            continue
 
+                        if classification.category == OTHER:
+                            uploaded_object_paths.append(object_path)
+                            logger.info("Skipping non-catalogue document %s after classification", target_name)
+                            continue
+
+                        text = self._extract_catalogue_text_from_file(file_path, ext, text)
+                        logger.info("Catalogue extraction text for %s has %s characters", target_name, len(text))
+                    else:
+                        logger.info("Skipping document classifier for non-PDF attachment %s", target_name)
                     uploaded_object_paths.append(object_path)
                     if not catalog_email.pdf_url:
                         catalog_email.pdf_url = uploaded_url
@@ -650,17 +682,39 @@ class EmailIngestionService:
                         CatalogItem.catalog_email_id == catalog_email.id
                     ).delete(synchronize_session=False)
 
+                if ext in IMAGE_ATTACHMENT_EXTENSIONS:
+                    image_items = self._extract_catalogue_items_from_image(file_path)
+                    if image_items:
+                        image_text = self._catalogue_item_evidence_text(image_items)
+                        stored = self._store_catalog_items(catalog_email, supplier, image_items, image_text, tenant_id=catalog_email.tenant_id)
+                        processed += stored
+                        if stored > 0:
+                            catalog_email.processing_status = "completed"
+                            self._touch_supplier_last_email(supplier, catalog_email.received_at)
+                        else:
+                            catalog_email.processing_status = "skipped"
+                        continue
+                    logger.info(
+                        "Image catalogue vision returned no valid items for reprocess %s; falling back to text parser",
+                        catalog_email.raw_email_id,
+                    )
+
                 text = self._extract_text_from_file(file_path, ext)
                 logger.info("Extracted %s characters while reprocessing email id=%s", len(text), catalog_email.raw_email_id)
-                classification = self._classify_document(file_path.name, ext, text)
-                if classification.category != CATALOGUE:
-                    catalog_email.processing_status = classification.category
-                    logger.info(
-                        "Skipping reprocess catalogue extraction for %s because document classified as %s",
-                        catalog_email.raw_email_id,
-                        classification.category,
-                    )
-                    continue
+                if ext == ".pdf":
+                    classification = self._classify_document(file_path.name, ext, text)
+                    if classification.category != CATALOGUE:
+                        catalog_email.processing_status = classification.category
+                        logger.info(
+                            "Skipping reprocess catalogue extraction for %s because document classified as %s",
+                            catalog_email.raw_email_id,
+                            classification.category,
+                        )
+                        continue
+                    text = self._extract_catalogue_text_from_file(file_path, ext, text)
+                    logger.info("Catalogue reprocess text for email id=%s has %s characters", catalog_email.raw_email_id, len(text))
+                else:
+                    logger.info("Skipping document classifier for non-PDF reprocess %s", catalog_email.raw_email_id)
                 extracted = self._extract_items_from_text(
                     text,
                     str(catalog_email.id),
@@ -2635,7 +2689,7 @@ class EmailIngestionService:
         elif ext == ".doc":
             return self._extract_word_text(file_path, ext)
 
-        elif ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"):
+        elif ext in IMAGE_ATTACHMENT_EXTENSIONS:
             return self._extract_image_text(file_path)
 
         elif ext == ".txt":
@@ -2644,6 +2698,33 @@ class EmailIngestionService:
             except Exception:
                 return ""
         return ""
+
+    def _extract_catalogue_text_from_file(self, file_path: Path, ext: str, existing_text: str) -> str:
+        if ext != ".pdf":
+            return existing_text
+
+        from backend.app.services.pdf_extract import extract_pdf_text
+
+        catalogue_text = extract_pdf_text(file_path, use_vision_for_images=True)
+        return catalogue_text or existing_text
+
+    def _extract_catalogue_items_from_image(self, file_path: Path) -> list[ExtractedCatalogItem]:
+        from backend.app.services.vision_extraction import extract_catalog_items_from_image_with_openrouter_vision
+
+        items = extract_catalog_items_from_image_with_openrouter_vision(file_path, source_name=file_path.name)
+        normalized = [normalize_item(item) for item in items]
+        return self._dedupe_extracted_items(normalized)
+
+    def _catalogue_item_evidence_text(self, items: list[ExtractedCatalogItem]) -> str:
+        lines = ["[OPENROUTER VISION JSON]"]
+        for item in items:
+            source = ""
+            notes = item.notes or ""
+            match = re.search(r"source\s*[:=]\s*['\"]?([^'\"]+)", notes, flags=re.IGNORECASE)
+            if match:
+                source = match.group(1).strip()
+            lines.append(source or f"{item.ingredient_name} {item.price_per_unit or ''} {item.unit or ''}".strip())
+        return "\n".join(line for line in lines if line)
 
     def _upload_file(self, file_path: Path, raw_email_id: str, mime_type: str) -> tuple[str, str]:
         safe_raw_id = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_email_id)

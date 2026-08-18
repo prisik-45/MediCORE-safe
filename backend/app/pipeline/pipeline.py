@@ -30,6 +30,7 @@ def process_document(
     file_path: Union[str, Path],
     budget: ExtractionBudget | None = None,
     allow_fallback: bool = False,
+    use_vision_for_pdf_images: bool = False,
 ) -> ExtractionResult:
     """Single entry point for processing documents (PDF, Image, DOCX, XLSX/XLS/CSV) with resource bounds."""
     path = Path(file_path)
@@ -40,7 +41,11 @@ def process_document(
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        return _process_pdf_document(path, budget=effective_budget)
+        return _process_pdf_document(
+            path,
+            budget=effective_budget,
+            use_vision_for_images=use_vision_for_pdf_images,
+        )
     elif suffix in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}:
         return _process_image_document(path, budget=effective_budget)
     elif suffix == ".docx":
@@ -56,7 +61,11 @@ def process_document(
         raise ValueError(f"Unsupported document format: '{suffix}'. Failing closed to protect parser resources.")
 
 
-def _process_pdf_document(path: Path, budget: ExtractionBudget | None = None) -> ExtractionResult:
+def _process_pdf_document(
+    path: Path,
+    budget: ExtractionBudget | None = None,
+    use_vision_for_images: bool = False,
+) -> ExtractionResult:
     result = ExtractionResult(source="pdf", file_path=str(path))
     effective_budget = budget or ExtractionBudget()
 
@@ -74,27 +83,41 @@ def _process_pdf_document(path: Path, budget: ExtractionBudget | None = None) ->
             table_blocks: list[ExtractedBlock] = []
 
             if classification.page_type == "native_text":
+                logger.info("PDF page %s: native text found, using PyMuPDF", page_num)
                 native_blocks = extract_native_text(fitz_page)
                 table_blocks = extract_tables_from_pdf_page(fitz_page)
             elif classification.page_type == "scanned":
                 page_img = pdf_wrapper.render_page_image(page_num, target_dpi=default_config.target_dpi)
                 norm_img = normalize_image_resolution(page_img)
-                vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                vision_block = (
+                    _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                    if use_vision_for_images
+                    else None
+                )
                 if vision_block:
+                    logger.info("PDF page %s: image/scanned catalogue page, using OpenRouter vision", page_num)
                     ocr_blocks = [vision_block]
                 else:
+                    logger.info("PDF page %s: using RapidOCR fallback", page_num)
                     ocr_blocks = extract_text_with_ocr(norm_img)
                     ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
                     table_blocks = extract_tables_from_image(norm_img)
             else:  # mixed page
+                logger.info("PDF page %s: mixed page, extracting native text with PyMuPDF", page_num)
                 native_blocks = extract_native_text(fitz_page)
                 page_img = pdf_wrapper.render_page_image(page_num, target_dpi=default_config.target_dpi)
                 norm_img = normalize_image_resolution(page_img)
-                vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                vision_block = (
+                    _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                    if use_vision_for_images
+                    else None
+                )
                 if vision_block:
+                    logger.info("PDF page %s: mixed catalogue image content, using OpenRouter vision", page_num)
                     ocr_blocks = [vision_block]
                     table_blocks = extract_tables_from_pdf_page(fitz_page)
                 else:
+                    logger.info("PDF page %s: using RapidOCR fallback for image content", page_num)
                     ocr_blocks = extract_text_with_ocr(norm_img)
                     ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
                     table_blocks = extract_tables_from_pdf_page(fitz_page) or extract_tables_from_image(norm_img)

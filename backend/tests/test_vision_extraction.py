@@ -9,7 +9,7 @@ from backend.app.services import vision_extraction
 def _settings(api_key: str = "openrouter-key") -> SimpleNamespace:
     return SimpleNamespace(
         openrouter_api_key=api_key,
-        openrouter_vision_model="nvidia/nemotron-3.5-lightning:free",
+        openrouter_vision_model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         openrouter_model="openai/gpt-4o-mini",
         openrouter_base_url="https://openrouter.test/api/v1",
         openrouter_site_url="",
@@ -54,7 +54,7 @@ def test_vision_extraction_uses_configured_openrouter_vision_model(monkeypatch, 
 
     assert text == "Vitamin C | USD 5/kg"
     assert captured["url"] == "https://openrouter.test/api/v1/chat/completions"
-    assert captured["json"]["model"] == "nvidia/nemotron-3.5-lightning:free"
+    assert captured["json"]["model"] == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
     assert captured["headers"]["Authorization"] == "Bearer openrouter-key"
     assert captured["json"]["messages"][1]["content"][1]["type"] == "image_url"
 
