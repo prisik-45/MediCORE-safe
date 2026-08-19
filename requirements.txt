@@ -36,8 +36,8 @@ xlrd>=2.0.1
 mammoth>=1.8.0
 # Owned by pipeline/ingestion/loader_image.py & preprocessing: image manipulation
 pillow>=10.0.0
-# Owned by pipeline/extraction/tables.py: image contouring for img2table
-opencv-contrib-python-headless>=4.10.0
+# Owned by pipeline/extraction/tables.py & rapidocr: headless image contouring and OCR
+opencv-python-headless>=4.10.0
 # Owned by backend/app/services/terminal_sync_status.py: terminal status reporting
 rich>=13.0.0
 # Owned by backend/app/schemas.py: data validation models

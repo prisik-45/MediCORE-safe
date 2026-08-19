@@ -1,8 +1,9 @@
 [project]
-name = "medicore"
+name = "medicore-backend"
 version = "0.1.0"
-description = "AI-powered supplier catalog ingestion, ranking, and chat system"
-requires-python = ">=3.12,<3.14"
+description = "MediCORE backend services"
+readme = "README.md"
+requires-python = ">=3.12"
 dependencies = [
     "celery>=5.4.0", # Owned by backend/app/tasks: async background processing
     "fastapi>=0.115.0", # Owned by backend/app/api: web API framework
@@ -23,7 +24,7 @@ dependencies = [
     "xlrd>=2.0.1", # Owned by pipeline/ingestion/loader_xlsx.py: Legacy Excel (.xls) file loader
     "mammoth>=1.8.0", # Owned by pipeline/ingestion/loader_docx.py: Word (.docx) document loader
     "pillow>=10.0.0", # Owned by pipeline/ingestion/loader_image.py & preprocessing: image manipulation
-    "opencv-contrib-python-headless>=4.10.0", # Owned by pipeline/extraction/tables.py: image contouring for img2table
+    "opencv-python-headless>=4.10.0", # Owned by pipeline/extraction/tables.py & rapidocr: headless image contouring and OCR
     "rich>=13.0.0", # Owned by backend/app/services/terminal_sync_status.py: terminal status reporting
     "pydantic[email]", # Owned by backend/app/schemas.py: data validation models
     "email-validator>=2.2.0", # Owned by backend/app/schemas.py: email format validation
@@ -43,4 +44,3 @@ package = false
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"

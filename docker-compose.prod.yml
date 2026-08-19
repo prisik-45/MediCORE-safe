@@ -99,6 +99,7 @@ services:
       - backend.app.tasks
       - worker
       - --loglevel=info
+      - --concurrency=4
     depends_on:
       valkey:
         condition: service_healthy
