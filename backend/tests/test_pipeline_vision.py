@@ -75,6 +75,24 @@ def test_pdf_extraction_skips_vision_by_default(monkeypatch, tmp_path: Path) -> 
     assert result.pages[0].blocks[0].engine == "rapidocr"
 
 
+def test_pdf_extraction_uses_vision_as_ocr_fallback_when_enabled(monkeypatch, tmp_path: Path) -> None:
+    pdf_path = _make_image_pdf(tmp_path)
+
+    monkeypatch.setattr(
+        pipeline,
+        "extract_image_text_with_openrouter_vision",
+        lambda image, source_name: "Vision fallback classification text",
+    )
+    monkeypatch.setattr(pipeline, "extract_text_with_ocr", lambda image: [])
+    monkeypatch.setattr(pipeline, "validate_and_retry_low_confidence_blocks", lambda image, blocks: blocks)
+    monkeypatch.setattr(pipeline, "extract_tables_from_image", lambda image: [])
+
+    result = pipeline.process_document(pdf_path, use_vision_as_pdf_ocr_fallback=True)
+
+    assert result.full_text() == "Vision fallback classification text"
+    assert result.pages[0].blocks[0].engine == "openrouter-vision"
+
+
 def test_pdf_extraction_uses_vision_when_catalogue_flag_is_enabled(monkeypatch, tmp_path: Path) -> None:
     pdf_path = _make_image_pdf(tmp_path)
 

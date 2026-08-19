@@ -31,6 +31,7 @@ def process_document(
     budget: ExtractionBudget | None = None,
     allow_fallback: bool = False,
     use_vision_for_pdf_images: bool = False,
+    use_vision_as_pdf_ocr_fallback: bool = False,
 ) -> ExtractionResult:
     """Single entry point for processing documents (PDF, Image, DOCX, XLSX/XLS/CSV) with resource bounds."""
     path = Path(file_path)
@@ -45,6 +46,7 @@ def process_document(
             path,
             budget=effective_budget,
             use_vision_for_images=use_vision_for_pdf_images,
+            use_vision_as_ocr_fallback=use_vision_as_pdf_ocr_fallback,
         )
     elif suffix in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}:
         return _process_image_document(path, budget=effective_budget)
@@ -65,6 +67,7 @@ def _process_pdf_document(
     path: Path,
     budget: ExtractionBudget | None = None,
     use_vision_for_images: bool = False,
+    use_vision_as_ocr_fallback: bool = False,
 ) -> ExtractionResult:
     result = ExtractionResult(source="pdf", file_path=str(path))
     effective_budget = budget or ExtractionBudget()
@@ -102,6 +105,12 @@ def _process_pdf_document(
                     ocr_blocks = extract_text_with_ocr(norm_img)
                     ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
                     table_blocks = extract_tables_from_image(norm_img)
+                    if use_vision_as_ocr_fallback and not _blocks_have_text(ocr_blocks + table_blocks):
+                        logger.info("PDF page %s: RapidOCR returned no text, using OpenRouter vision fallback", page_num)
+                        vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                        if vision_block:
+                            ocr_blocks = [vision_block]
+                            table_blocks = []
             else:  # mixed page
                 logger.info("PDF page %s: mixed page, extracting native text with PyMuPDF", page_num)
                 native_blocks = extract_native_text(fitz_page)
@@ -121,6 +130,12 @@ def _process_pdf_document(
                     ocr_blocks = extract_text_with_ocr(norm_img)
                     ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
                     table_blocks = extract_tables_from_pdf_page(fitz_page) or extract_tables_from_image(norm_img)
+                    if use_vision_as_ocr_fallback and not _blocks_have_text(native_blocks + ocr_blocks + table_blocks):
+                        logger.info("PDF page %s: RapidOCR returned no text, using OpenRouter vision fallback", page_num)
+                        vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                        if vision_block:
+                            ocr_blocks = [vision_block]
+                            table_blocks = extract_tables_from_pdf_page(fitz_page)
 
             merged = merge_page_blocks(
                 native_blocks=native_blocks,
@@ -132,6 +147,10 @@ def _process_pdf_document(
             result.pages.append(create_document_page_result(page_num=page_num, source="pdf", blocks=merged))
 
     return result
+
+
+def _blocks_have_text(blocks: list[ExtractedBlock]) -> bool:
+    return any((block.content or "").strip() for block in blocks)
 
 
 def _process_image_document(path: Path, budget: ExtractionBudget | None = None) -> ExtractionResult:

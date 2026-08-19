@@ -2759,7 +2759,7 @@ class EmailIngestionService:
     def _extract_text_from_file(self, file_path: Path, ext: str) -> str:
         if ext == ".pdf":
             from backend.app.services.pdf_extract import extract_pdf_text
-            return extract_pdf_text(file_path)
+            return extract_pdf_text(file_path, use_vision_as_ocr_fallback=True)
 
         elif ext in (".xlsx", ".xls", ".xlsm", ".xltx", ".xltm"):
             return self._extract_spreadsheet_text(file_path, ext)
