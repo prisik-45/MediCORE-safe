@@ -8,9 +8,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-scripts/
 node_modules/
-md/
 frontend/node_modules/
 .next/
 frontend/.next/
@@ -24,7 +22,11 @@ frontend/out/
 *.sqlite
 *.db
 
-
+# Certbot & TLS Secrets
+certbot/conf/
+certs/
+*.pem
+*.key
 
 sample-Catalogue.pdf
 sample-Catalogue-preview.png
@@ -34,7 +36,6 @@ Tarkshy.png
 .antigravitycli
 skills-lock.json
 MediCORE_CNS_Pharma_Pitch.pptx
-Tarkshy.png
 image
 md/*
 !md/

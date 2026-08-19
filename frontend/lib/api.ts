@@ -21,10 +21,9 @@ function normalizeBrowserUrl(url: string) {
     const parsed = new URL(url);
     if (
       isLocalHostname(window.location.hostname) &&
-      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1")
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "api")
     ) {
-      parsed.hostname = window.location.hostname === "127.0.0.1" ? "127.0.0.1" : "localhost";
-      return parsed.toString().replace(/\/$/, "");
+      return "";
     }
 
     if (window.location.protocol === "https:" && url.startsWith("http://") && !isLocalHostname(parsed.hostname)) {
@@ -40,39 +39,51 @@ function normalizeBrowserUrl(url: string) {
 
 export function getApiBaseUrl() {
   if (process.env.NEXT_PUBLIC_API_URL) {
-    return normalizeBrowserUrl(process.env.NEXT_PUBLIC_API_URL).replace(/\/$/, "");
+    const envUrl = process.env.NEXT_PUBLIC_API_URL.trim();
+    if (typeof window !== "undefined") {
+      try {
+        const parsed = new URL(envUrl);
+        // If NEXT_PUBLIC_API_URL points to port 8000 or internal docker hostname 'api', use relative path
+        if (parsed.port === "8000" || parsed.hostname === "api" || parsed.hostname === "backend") {
+          return "";
+        }
+      } catch {
+        // Relative URL format
+      }
+    }
+    return normalizeBrowserUrl(envUrl).replace(/\/$/, "");
   }
 
-  if (typeof window === "undefined") {
-    return "http://127.0.0.1:8000";
+  // In browser, return empty string so browser requests use relative paths /api/...
+  if (typeof window !== "undefined") {
+    return "";
   }
 
-  const hostname = window.location.hostname;
-  if (isLocalHostname(hostname)) {
-    return `${window.location.protocol}//${hostname}:8000`;
-  }
-
-  return `${window.location.origin}`;
+  // Next.js SSR inside Docker container
+  return "http://api:8000";
 }
 
 export function getChatWsUrl() {
   if (process.env.NEXT_PUBLIC_WS_URL) {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL;
-    if (typeof window !== "undefined" && window.location.protocol === "https:" && wsUrl.startsWith("ws://")) {
-      return `wss://${wsUrl.slice("ws://".length)}`;
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL.trim();
+    if (typeof window !== "undefined") {
+      try {
+        const parsed = new URL(wsUrl);
+        if (parsed.port === "8000" || parsed.hostname === "api" || parsed.hostname === "backend") {
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          return `${protocol}//${window.location.host}${CHAT_WS_PATH}`;
+        }
+      } catch {
+        // Relative WS path
+      }
     }
     return wsUrl;
   }
 
   if (typeof window === "undefined") {
-    return "ws://127.0.0.1:8000/ws/chat";
+    return "ws://api:8000/ws/chat";
   }
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const hostname = window.location.hostname;
-  if (isLocalHostname(hostname)) {
-    return `${protocol}//${hostname}:8000${CHAT_WS_PATH}`;
-  }
-
   return `${protocol}//${window.location.host}${CHAT_WS_PATH}`;
 }

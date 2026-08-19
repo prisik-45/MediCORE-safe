@@ -1,4 +1,28 @@
 services:
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+  certbot:
+    image: certbot/certbot:v2.11.0
+    restart: unless-stopped
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while true; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done;'"
+
   valkey:
     image: valkey/valkey:8-alpine
     restart: unless-stopped
@@ -30,14 +54,14 @@ services:
     env_file:
       - .env
     environment:
-      ENVIRONMENT: development
+      ENVIRONMENT: production
       APP_NAME: MediCORE
-      API_BASE_URL: http://localhost:8000
-      FRONTEND_ORIGIN: http://localhost:3000
+      API_BASE_URL: ${API_BASE_URL:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-}
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
       REDIS_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
-    ports:
-      - "${API_PORT:-8000}:8000"
+    expose:
+      - "8000"
     depends_on:
       valkey:
         condition: service_healthy
@@ -61,10 +85,10 @@ services:
     env_file:
       - .env
     environment:
-      ENVIRONMENT: development
+      ENVIRONMENT: production
       APP_NAME: MediCORE
-      API_BASE_URL: http://localhost:8000
-      FRONTEND_ORIGIN: http://localhost:3000
+      API_BASE_URL: ${API_BASE_URL:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-}
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
       REDIS_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
     command:
@@ -78,6 +102,23 @@ services:
     depends_on:
       valkey:
         condition: service_healthy
+      api:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: medicore-frontend:${MEDICORE_IMAGE_TAG:-prod}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    expose:
+      - "3000"
+    depends_on:
       api:
         condition: service_healthy
 
@@ -168,3 +209,5 @@ services:
 
 volumes:
   valkey_prod_data:
+  certbot_conf:
+  certbot_www:

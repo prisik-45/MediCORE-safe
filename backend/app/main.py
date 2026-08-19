@@ -1,19 +1,31 @@
 import logging
+from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO)
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from backend.app.api import auth_session, catalogs, chat, health, ingestion, suppliers, webhooks, email_accounts, admin, superadmin
+from backend.app.api import (
+    admin,
+    auth_session,
+    catalogs,
+    chat,
+    email_accounts,
+    health,
+    ingestion,
+    superadmin,
+    suppliers,
+    webhooks,
+)
 from backend.app.config import get_settings
-
 
 settings = get_settings()
 
 allowed_origins = {
-    settings.frontend_origin,
+    settings.frontend_origin.rstrip("/"),
     "https://medi-core2.vercel.app",
 }
 allow_origin_regex = None
@@ -33,9 +45,26 @@ if settings.environment.lower() != "production":
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
+# Trust forwarded headers from reverse proxies (Nginx)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+
 
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):
+async def add_security_and_csrf_headers(request: Request, call_next):
+    # CSRF check for state-changing HTTP requests when origin is supplied
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        path = request.url.path
+        if not path.startswith("/webhooks") and not path.startswith("/api/health"):
+            origin = request.headers.get("origin") or request.headers.get("referer")
+            if origin and settings.environment.lower() == "production":
+                parsed_origin = urlparse(origin)
+                origin_str = f"{parsed_origin.scheme}://{parsed_origin.netloc}".rstrip("/")
+                if origin_str not in allowed_origins:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "CSRF verification failed: Invalid request origin."},
+                    )
+
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -57,14 +86,13 @@ app.add_middleware(
 
 logger = logging.getLogger(__name__)
 
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception occurred during request handling", exc_info=exc)
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": "Internal Server Error"
-        }
+        content={"detail": "Internal Server Error"},
     )
 
 

@@ -1,6 +1,31 @@
 services:
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+  certbot:
+    image: certbot/certbot:v2.11.0
+    restart: unless-stopped
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while true; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done;'"
+
   valkey:
     image: valkey/valkey:8-alpine
+    restart: unless-stopped
     command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD:-medicore-local-valkey-password}", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:6379:6379"
@@ -16,26 +41,59 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
     env_file: .env
     environment:
       VALKEY_URL: ${VALKEY_URL:-redis://:${VALKEY_PASSWORD:-medicore-local-valkey-password}@valkey:6379/0}
-    ports:
-      - "8000:8000"
+      REDIS_URL: ${VALKEY_URL:-redis://:${VALKEY_PASSWORD:-medicore-local-valkey-password}@valkey:6379/0}
+    expose:
+      - "8000"
     depends_on:
       valkey:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
     env_file: .env
     environment:
       VALKEY_URL: ${VALKEY_URL:-redis://:${VALKEY_PASSWORD:-medicore-local-valkey-password}@valkey:6379/0}
+      REDIS_URL: ${VALKEY_URL:-redis://:${VALKEY_PASSWORD:-medicore-local-valkey-password}@valkey:6379/0}
     command: ["uv", "run", "celery", "-A", "backend.app.tasks", "worker", "--loglevel=info"]
     depends_on:
       valkey:
         condition: service_healthy
+      api:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   valkey_data:
+  certbot_conf:
+  certbot_www:
