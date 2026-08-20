@@ -50,7 +50,7 @@ class NaturalLanguageQueryEngine:
     def __init__(self, db: Session, cache: Redis) -> None:
         self.db = db
         self.cache = cache
-        self.llm = OpenRouterClient()
+        self.llm = OpenRouterClient(db=db)
         self.ranker = SupplierRanker(db)
         self.conversation_state: dict[str, Any] = {}
 
@@ -108,7 +108,7 @@ class NaturalLanguageQueryEngine:
 
             if understanding.operation == "unrelated":
                 self._log_query(question, tenant_id=tenant_id, user_id=user_id, operation_type="unrelated")
-                return ChatResponse(answer=self._personal_assistant_answer(question), rows=[])
+                return ChatResponse(answer=self._personal_assistant_answer(question, tenant_id=tenant_id), rows=[])
 
             if not understanding.needs_database:
                 self._log_query(question, tenant_id=tenant_id, user_id=user_id, operation_type=understanding.intent)
@@ -193,7 +193,7 @@ class NaturalLanguageQueryEngine:
             # 5. Answer Summarization & State Update
             # ----------------------------------------------------
             try:
-                answer = self.llm.summarize_answer(question, rows)
+                answer = self.llm.summarize_answer(question, rows, tenant_id=tenant_id)
             except TokenLimitReachedError:
                 raise
             except Exception as exc:
@@ -372,9 +372,9 @@ class NaturalLanguageQueryEngine:
     def _procurement_advice_answer(self, question: str) -> str:
         return "I can help you search catalogues, compare supplier prices, check unit costs, and evaluate MOQ and lead times. Please name an ingredient or product to query MediCORE data."
 
-    def _personal_assistant_answer(self, question: str) -> str:
+    def _personal_assistant_answer(self, question: str, tenant_id: Any | None = None) -> str:
         try:
-            return self.llm.personal_assistant_answer(question)
+            return self.llm.personal_assistant_answer(question, tenant_id=tenant_id)
         except Exception:
             return "I am MediCORE AI Assistant, specialized in pharmaceutical procurement and catalogue price analysis."
 

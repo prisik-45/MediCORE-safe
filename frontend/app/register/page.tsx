@@ -3,7 +3,7 @@
 import { useState, useEffect, FormEvent, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, getApiErrorMessage } from "@/lib/api";
 import { loginWithPassword } from "@/lib/auth";
 import { Sparkles, ArrowRight, ShieldCheck, Mail, Lock, User, Briefcase, Loader2, Info, Eye, EyeOff } from "lucide-react";
 
@@ -63,7 +63,7 @@ function RegisterStep1Content() {
 
         if (!res.ok) {
           const detail = await res.json().catch(() => ({}));
-          throw new Error(detail.detail || "Failed to complete account activation.");
+          throw new Error(getApiErrorMessage(detail, "Failed to complete account activation."));
         }
 
         // Now, log the user in immediately so that we have an active session
@@ -88,7 +88,7 @@ function RegisterStep1Content() {
 
         if (!res.ok) {
           const detail = await res.json().catch(() => ({}));
-          throw new Error(detail.detail || "Workspace registration failed.");
+          throw new Error(getApiErrorMessage(detail, "Workspace registration failed."));
         }
 
         // Set pending approval flag

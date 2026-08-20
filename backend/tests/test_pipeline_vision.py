@@ -93,6 +93,27 @@ def test_pdf_extraction_uses_vision_as_ocr_fallback_when_enabled(monkeypatch, tm
     assert result.pages[0].blocks[0].engine == "openrouter-vision"
 
 
+def test_pdf_extraction_uses_vision_when_rapidocr_fails_and_fallback_enabled(monkeypatch, tmp_path: Path) -> None:
+    pdf_path = _make_image_pdf(tmp_path)
+
+    monkeypatch.setattr(
+        pipeline,
+        "extract_image_text_with_openrouter_vision",
+        lambda image, source_name: "Vision fallback after RapidOCR failure",
+    )
+
+    def fail_rapidocr(*args, **kwargs):
+        raise RuntimeError("RapidOCR engine initialization failed")
+
+    monkeypatch.setattr(pipeline, "extract_text_with_ocr", fail_rapidocr)
+    monkeypatch.setattr(pipeline, "extract_tables_from_image", lambda image: [])
+
+    result = pipeline.process_document(pdf_path, use_vision_as_pdf_ocr_fallback=True)
+
+    assert result.full_text() == "Vision fallback after RapidOCR failure"
+    assert result.pages[0].blocks[0].engine == "openrouter-vision"
+
+
 def test_pdf_extraction_uses_vision_when_catalogue_flag_is_enabled(monkeypatch, tmp_path: Path) -> None:
     pdf_path = _make_image_pdf(tmp_path)
 

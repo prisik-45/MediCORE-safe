@@ -63,6 +63,42 @@ export function getApiBaseUrl() {
   return "http://api:8000";
 }
 
+export function getApiErrorMessage(payload: unknown, fallback: string) {
+  if (!payload || typeof payload !== "object") {
+    return fallback;
+  }
+
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (item && typeof item === "object") {
+          const entry = item as { msg?: unknown; message?: unknown };
+          if (typeof entry.msg === "string") return entry.msg;
+          if (typeof entry.message === "string") return entry.message;
+        }
+        return "";
+      })
+      .filter(Boolean);
+
+    if (messages.length > 0) {
+      return messages.join(" ");
+    }
+  }
+
+  if (detail && typeof detail === "object") {
+    const entry = detail as { msg?: unknown; message?: unknown };
+    if (typeof entry.msg === "string") return entry.msg;
+    if (typeof entry.message === "string") return entry.message;
+  }
+
+  return fallback;
+}
+
 export function getChatWsUrl() {
   if (process.env.NEXT_PUBLIC_WS_URL) {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL.trim();

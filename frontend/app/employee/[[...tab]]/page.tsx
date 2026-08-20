@@ -145,6 +145,14 @@ type AuthUser = {
   organisation?: string;
 };
 
+type CurrentAISettings = {
+  provider: string;
+  has_api_key: boolean;
+  api_key_last4?: string | null;
+  vision_model: string;
+  text_model: string;
+};
+
 type EmailFilter = {
   id?: string;
   require_attachment: boolean;
@@ -976,6 +984,9 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
   const [editOrganisation, setEditOrganisation] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [aiSettings, setAiSettings] = useState<CurrentAISettings | null>(null);
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(false);
+  const [aiSettingsError, setAiSettingsError] = useState<string | null>(null);
 
   // Chat streaming and indicator states/refs
   const [isTypingResponse, setIsTypingResponse] = useState(false);
@@ -992,6 +1003,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
   // Initial load tracking ref
   const initialLoadRef = useRef(false);
   const profileFetchedRef = useRef(false);
+  const aiSettingsFetchedRef = useRef(false);
 
   useEffect(() => {
     if (syncSettings) {
@@ -2055,6 +2067,27 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
     }
   }
 
+  async function fetchCurrentAISettings() {
+    if (aiSettingsFetchedRef.current) return;
+    aiSettingsFetchedRef.current = true;
+    setAiSettingsLoading(true);
+    setAiSettingsError(null);
+    try {
+      const res = await authFetch(`${apiBaseUrl}/api/ai-settings/current`);
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || "Failed to load workspace AI settings.");
+      }
+      const data: CurrentAISettings = await res.json();
+      setAiSettings(data);
+    } catch (err: any) {
+      setAiSettingsError(err.message || "Failed to load workspace AI settings.");
+      aiSettingsFetchedRef.current = false;
+    } finally {
+      setAiSettingsLoading(false);
+    }
+  }
+
   // --- Premium Settings Integration Helpers ---
   function showConnectionFailure(message = "Unable to communicate with MediCORE. Please check your internet connection and try again.") {
     setConnectionError(message);
@@ -2496,6 +2529,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
     if (authUser && activeTab === "settings") {
       fetchConnectedAccounts();
       fetchEmailSyncSettings();
+      fetchCurrentAISettings();
       setNewAccountEmail(authUser.email);
     }
   }, [authUser, activeTab]);
@@ -3908,6 +3942,45 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
                             <span style={{ fontSize: "13.5px", fontWeight: 600, color: "var(--muted)", background: "#f9fafb", padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--line)" }}>
                               {authUser.organisation || "MediCORE Central"}
                             </span>
+                          </div>
+
+                          <div style={{ borderTop: "1px solid var(--line)", padding: "16px 0", display: "flex", flexDirection: "column", gap: "14px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                <Shield size={16} color="var(--accent)" />
+                                <strong style={{ display: "block", fontSize: "14px", color: "var(--ink)" }}>Workspace AI Configuration</strong>
+                              </div>
+                              <span style={{
+                                fontSize: "12px",
+                                fontWeight: 700,
+                                color: aiSettings?.has_api_key ? "var(--accent)" : "var(--muted)",
+                                background: aiSettings?.has_api_key ? "rgba(15, 122, 95, 0.08)" : "#f9fafb",
+                                padding: "5px 10px",
+                                borderRadius: "999px",
+                                border: "1px solid var(--line)",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.04em"
+                              }}>
+                                {aiSettings?.has_api_key && aiSettings.api_key_last4 ? `OpenRouter ****${aiSettings.api_key_last4}` : "OpenRouter not configured"}
+                              </span>
+                            </div>
+
+                            {aiSettingsLoading ? (
+                              <span style={{ fontSize: "13px", color: "var(--muted)" }}>Loading workspace AI settings...</span>
+                            ) : aiSettingsError ? (
+                              <span style={{ fontSize: "13px", color: "#9b1c1c" }}>{aiSettingsError}</span>
+                            ) : (
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "12px" }}>
+                                <div style={{ background: "#f9fafb", border: "1px solid var(--line)", borderRadius: "8px", padding: "12px" }}>
+                                  <span style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>Vision Model</span>
+                                  <span style={{ display: "block", fontSize: "13px", color: "var(--ink)", overflowWrap: "anywhere" }}>{aiSettings?.vision_model || "-"}</span>
+                                </div>
+                                <div style={{ background: "#f9fafb", border: "1px solid var(--line)", borderRadius: "8px", padding: "12px" }}>
+                                  <span style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>Text Model</span>
+                                  <span style={{ display: "block", fontSize: "13px", color: "var(--ink)", overflowWrap: "anywhere" }}>{aiSettings?.text_model || "-"}</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>

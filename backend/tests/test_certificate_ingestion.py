@@ -66,7 +66,7 @@ class CertificateIngestionTest(unittest.TestCase):
             f"https://example.supabase.co/storage/v1/object/public/catalog-pdfs/{file_path.name}",
             f"{raw_email_id}/{file_path.name}",
         )
-        service._extract_text_from_file = lambda file_path, ext: (
+        service._extract_text_from_file = lambda file_path, ext, **kwargs: (
             "Certificate of Analysis\nProduct: Ashwagandha\nBatch No: A-1\nAssay: 20%"
             if ext == ".pdf"
             else file_path.read_text(encoding="utf-8", errors="ignore")
@@ -176,7 +176,7 @@ class CertificateIngestionTest(unittest.TestCase):
             f"https://example.supabase.co/storage/v1/object/public/catalog-pdfs/{file_path.name}",
             f"{raw_email_id}/{file_path.name}",
         )
-        service._extract_text_from_file = lambda file_path, ext: (
+        service._extract_text_from_file = lambda file_path, ext, **kwargs: (
             "Certificate of Analysis\nProduct: L-Carnitine\nBatch No: LC-1\nAssay: 99%"
             if ext == ".pdf"
             else file_path.read_text(encoding="utf-8", errors="ignore")
@@ -541,7 +541,7 @@ class CertificateIngestionTest(unittest.TestCase):
         service._extract_text_from_file = lambda *args, **kwargs: self.fail("image text fallback should not run")
         service._classify_document = lambda *args, **kwargs: self.fail("non-PDF classifier should not run")
         service._extract_items_from_text = lambda *args, **kwargs: self.fail("parser/LLM fallback should not run")
-        service._extract_catalogue_items_from_image = lambda file_path: [
+        service._extract_catalogue_items_from_image = lambda file_path, **kwargs: [
             ExtractedCatalogItem(
                 ingredient_name="Vitamin C",
                 price_per_unit=5.0,
@@ -625,10 +625,10 @@ class CertificateIngestionTest(unittest.TestCase):
         )
         service._delete_uploaded_files = lambda object_paths: None
         service._update_supplier_country = lambda supplier, *texts: None
-        service._extract_catalogue_items_from_image = lambda file_path: []
-        service._extract_text_from_file = lambda file_path, ext: "Vitamin C USD 5/kg source row"
+        service._extract_catalogue_items_from_image = lambda file_path, **kwargs: []
+        service._extract_text_from_file = lambda file_path, ext, **kwargs: "Vitamin C USD 5/kg source row"
         service._classify_document = lambda *args, **kwargs: self.fail("non-PDF classifier should not run")
-        service._extract_items_from_text = lambda text, source_name, reference_date=None: [
+        service._extract_items_from_text = lambda text, source_name, reference_date=None, **kwargs: [
             ExtractedCatalogItem(
                 ingredient_name="Vitamin C",
                 price_per_unit=5.0,

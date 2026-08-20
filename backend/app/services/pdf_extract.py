@@ -5,6 +5,7 @@ Owned by: backend/app/services/pdf_extract.py
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from backend.app.pipeline.pipeline import process_document
 
@@ -18,6 +19,8 @@ def extract_pdf_text(
     path: str | Path,
     use_vision_for_images: bool = False,
     use_vision_as_ocr_fallback: bool = False,
+    db: Any | None = None,
+    tenant_id: Any | None = None,
 ) -> str:
     """Extract text from a PDF file using the unified document extraction pipeline."""
     pdf_path = Path(path)
@@ -30,6 +33,8 @@ def extract_pdf_text(
             pdf_path,
             use_vision_for_pdf_images=use_vision_for_images,
             use_vision_as_pdf_ocr_fallback=use_vision_as_ocr_fallback,
+            db=db,
+            tenant_id=tenant_id,
         )
         return result.full_text()
     except Exception as err:
@@ -41,6 +46,8 @@ def extract_pdf_document(
     source: bytes | str | Path,
     use_vision_for_images: bool = False,
     use_vision_as_ocr_fallback: bool = False,
+    db: Any | None = None,
+    tenant_id: Any | None = None,
 ) -> SimpleNamespace:
     """Extract PDF document from bytes or file path and return an object with full_text."""
     if isinstance(source, bytes):
@@ -52,6 +59,8 @@ def extract_pdf_document(
                 tmp_path,
                 use_vision_for_images=use_vision_for_images,
                 use_vision_as_ocr_fallback=use_vision_as_ocr_fallback,
+                db=db,
+                tenant_id=tenant_id,
             )
         finally:
             if tmp_path.exists():
@@ -62,5 +71,7 @@ def extract_pdf_document(
             source,
             use_vision_for_images=use_vision_for_images,
             use_vision_as_ocr_fallback=use_vision_as_ocr_fallback,
+            db=db,
+            tenant_id=tenant_id,
         )
     )

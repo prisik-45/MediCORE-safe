@@ -5,7 +5,7 @@ Owned by: pipeline/pipeline.py
 
 import logging
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 from backend.app.pipeline.budget import ExtractionBudget
 from backend.app.pipeline.classification.page_classifier import classify_pdf_page
@@ -32,6 +32,8 @@ def process_document(
     allow_fallback: bool = False,
     use_vision_for_pdf_images: bool = False,
     use_vision_as_pdf_ocr_fallback: bool = False,
+    db: Any | None = None,
+    tenant_id: Any | None = None,
 ) -> ExtractionResult:
     """Single entry point for processing documents (PDF, Image, DOCX, XLSX/XLS/CSV) with resource bounds."""
     path = Path(file_path)
@@ -47,6 +49,8 @@ def process_document(
             budget=effective_budget,
             use_vision_for_images=use_vision_for_pdf_images,
             use_vision_as_ocr_fallback=use_vision_as_pdf_ocr_fallback,
+            db=db,
+            tenant_id=tenant_id,
         )
     elif suffix in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}:
         return _process_image_document(path, budget=effective_budget)
@@ -68,6 +72,8 @@ def _process_pdf_document(
     budget: ExtractionBudget | None = None,
     use_vision_for_images: bool = False,
     use_vision_as_ocr_fallback: bool = False,
+    db: Any | None = None,
+    tenant_id: Any | None = None,
 ) -> ExtractionResult:
     result = ExtractionResult(source="pdf", file_path=str(path))
     effective_budget = budget or ExtractionBudget()
@@ -93,7 +99,7 @@ def _process_pdf_document(
                 page_img = pdf_wrapper.render_page_image(page_num, target_dpi=default_config.target_dpi)
                 norm_img = normalize_image_resolution(page_img)
                 vision_block = (
-                    _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                    _extract_vision_block(norm_img, f"{path.name} page {page_num}", db=db, tenant_id=tenant_id)
                     if use_vision_for_images
                     else None
                 )
@@ -102,12 +108,24 @@ def _process_pdf_document(
                     ocr_blocks = [vision_block]
                 else:
                     logger.info("PDF page %s: using RapidOCR fallback", page_num)
-                    ocr_blocks = extract_text_with_ocr(norm_img)
-                    ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
-                    table_blocks = extract_tables_from_image(norm_img)
-                    if use_vision_as_ocr_fallback and not _blocks_have_text(ocr_blocks + table_blocks):
-                        logger.info("PDF page %s: RapidOCR returned no text, using OpenRouter vision fallback", page_num)
-                        vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                    rapidocr_failed = False
+                    try:
+                        ocr_blocks = extract_text_with_ocr(norm_img)
+                        ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
+                        table_blocks = extract_tables_from_image(norm_img)
+                    except Exception as exc:
+                        if not use_vision_as_ocr_fallback:
+                            raise
+                        rapidocr_failed = True
+                        logger.warning(
+                            "PDF page %s: RapidOCR failed, using OpenRouter vision fallback: %s",
+                            page_num,
+                            exc,
+                            exc_info=True,
+                        )
+                    if use_vision_as_ocr_fallback and (rapidocr_failed or not _blocks_have_text(ocr_blocks + table_blocks)):
+                        logger.info("PDF page %s: RapidOCR failed or returned no text, using OpenRouter vision fallback", page_num)
+                        vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}", db=db, tenant_id=tenant_id)
                         if vision_block:
                             ocr_blocks = [vision_block]
                             table_blocks = []
@@ -117,7 +135,7 @@ def _process_pdf_document(
                 page_img = pdf_wrapper.render_page_image(page_num, target_dpi=default_config.target_dpi)
                 norm_img = normalize_image_resolution(page_img)
                 vision_block = (
-                    _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                    _extract_vision_block(norm_img, f"{path.name} page {page_num}", db=db, tenant_id=tenant_id)
                     if use_vision_for_images
                     else None
                 )
@@ -127,12 +145,25 @@ def _process_pdf_document(
                     table_blocks = extract_tables_from_pdf_page(fitz_page)
                 else:
                     logger.info("PDF page %s: using RapidOCR fallback for image content", page_num)
-                    ocr_blocks = extract_text_with_ocr(norm_img)
-                    ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
-                    table_blocks = extract_tables_from_pdf_page(fitz_page) or extract_tables_from_image(norm_img)
-                    if use_vision_as_ocr_fallback and not _blocks_have_text(native_blocks + ocr_blocks + table_blocks):
-                        logger.info("PDF page %s: RapidOCR returned no text, using OpenRouter vision fallback", page_num)
-                        vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}")
+                    rapidocr_failed = False
+                    try:
+                        ocr_blocks = extract_text_with_ocr(norm_img)
+                        ocr_blocks = validate_and_retry_low_confidence_blocks(norm_img, ocr_blocks)
+                        table_blocks = extract_tables_from_pdf_page(fitz_page) or extract_tables_from_image(norm_img)
+                    except Exception as exc:
+                        if not use_vision_as_ocr_fallback:
+                            raise
+                        rapidocr_failed = True
+                        table_blocks = extract_tables_from_pdf_page(fitz_page)
+                        logger.warning(
+                            "PDF page %s: RapidOCR failed, using OpenRouter vision fallback: %s",
+                            page_num,
+                            exc,
+                            exc_info=True,
+                        )
+                    if use_vision_as_ocr_fallback and (rapidocr_failed or not _blocks_have_text(native_blocks + ocr_blocks + table_blocks)):
+                        logger.info("PDF page %s: RapidOCR failed or returned no text, using OpenRouter vision fallback", page_num)
+                        vision_block = _extract_vision_block(norm_img, f"{path.name} page {page_num}", db=db, tenant_id=tenant_id)
                         if vision_block:
                             ocr_blocks = [vision_block]
                             table_blocks = extract_tables_from_pdf_page(fitz_page)
@@ -178,8 +209,11 @@ def _process_image_document(path: Path, budget: ExtractionBudget | None = None) 
     return result
 
 
-def _extract_vision_block(image, source_name: str) -> ExtractedBlock | None:
-    text = extract_image_text_with_openrouter_vision(image, source_name=source_name)
+def _extract_vision_block(image, source_name: str, db: Any | None = None, tenant_id: Any | None = None) -> ExtractedBlock | None:
+    if db is not None or tenant_id is not None:
+        text = extract_image_text_with_openrouter_vision(image, source_name=source_name, db=db, tenant_id=tenant_id)
+    else:
+        text = extract_image_text_with_openrouter_vision(image, source_name=source_name)
     if not text:
         return None
     return ExtractedBlock(

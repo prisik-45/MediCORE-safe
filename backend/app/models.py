@@ -136,6 +136,19 @@ class EmailSyncSetting(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class TenantAISetting(Base):
+    __tablename__ = "tenant_ai_settings"
+
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50), default="openrouter", server_default="openrouter", nullable=False)
+    encrypted_api_key: Mapped[str | None] = mapped_column(Text)
+    api_key_last4: Mapped[str | None] = mapped_column(String(8))
+    vision_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    text_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_by: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class EmployeeInvitation(Base):
     __tablename__ = "employee_invitations"
 

@@ -6,7 +6,7 @@ from sqlalchemy import text
 from backend.app.db import get_db, get_supabase
 from backend.app.auth import get_current_superadmin
 from backend.app.models import Profile, CatalogEmail, AIQueryLog
-from backend.app.services.email_sender import send_smtp_email
+from backend.app.services.email_sender import send_transactional_email
 from backend.app.config import get_settings
 from backend.app.security import escape_html
 
@@ -58,7 +58,7 @@ def approve_workspace(id: str, background_tasks: BackgroundTasks, db: Session = 
           <p style="font-size:12px;color:#66736d;margin:0;">Regards,<br>MediCORE Team</p>
         </div>
         """
-        background_tasks.add_task(send_smtp_email, admin_email, "Your MediCORE Workspace Has Been Approved!", email_html)
+        background_tasks.add_task(send_transactional_email, admin_email, "Your MediCORE Workspace Has Been Approved!", email_html)
 
     return {"success": True, "message": f"Workspace {profile.organisation} approved successfully."}
 

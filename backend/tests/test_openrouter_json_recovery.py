@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+from backend.app.services import llm as llm_module
 from backend.app.services.llm import EXTRACTION_CHUNK_CHARS, ModelProviderConfig, OpenRouterClient, TokenLimitReachedError
 
 
@@ -41,6 +44,28 @@ def test_model_router_uses_groq_before_openrouter() -> None:
 
     assert client._chat([{"role": "user", "content": "hello"}]) == "primary response"
     assert called == ["groq"]
+
+
+def test_tenant_llm_routing_uses_tenant_openrouter_without_env_openrouter_fallback(monkeypatch) -> None:
+    client = object.__new__(OpenRouterClient)
+    client.db = object()
+    client.cerebras_provider = ModelProviderConfig("cerebras", "cerebras-key", "cerebras-model", "https://cerebras.test")
+    client.openrouter_fallback_provider = ModelProviderConfig("openrouter", "env-openrouter-key", "env-openrouter-model", "https://openrouter.test")
+
+    monkeypatch.setattr(llm_module, "get_tenant_openrouter_config", lambda db, tenant_id: None)
+    providers_without_settings = client._available_providers(tenant_id="00000000-0000-0000-0000-000000000001")
+
+    monkeypatch.setattr(
+        llm_module,
+        "get_tenant_openrouter_config",
+        lambda db, tenant_id: SimpleNamespace(api_key="tenant-key", text_model="tenant/text-model"),
+    )
+    providers_with_settings = client._available_providers(tenant_id="00000000-0000-0000-0000-000000000001")
+
+    assert [provider.name for provider in providers_without_settings] == ["cerebras"]
+    assert providers_with_settings[0].name == "openrouter"
+    assert providers_with_settings[0].api_key == "tenant-key"
+    assert providers_with_settings[0].model == "tenant/text-model"
 
 
 def test_model_router_falls_back_to_openrouter_after_groq_failure() -> None:

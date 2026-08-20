@@ -8,12 +8,14 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 import httpx
 from PIL import Image, ImageOps
 
 from backend.app.config import get_settings
 from backend.app.schemas import ExtractedCatalogItem
+from backend.app.services.tenant_ai_settings import get_tenant_openrouter_config
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,12 @@ VISION_JPEG_QUALITY = 85
 VISION_MAX_OUTPUT_TOKENS = 4000
 
 
-def extract_image_text_with_openrouter_vision(image_or_path: Image.Image | Path, source_name: str = "image") -> str:
+def extract_image_text_with_openrouter_vision(
+    image_or_path: Image.Image | Path,
+    source_name: str = "image",
+    db: Any | None = None,
+    tenant_id: Any | None = None,
+) -> str:
     """Extract visible catalogue text/table content using the configured OpenRouter vision model."""
     try:
         payload = {
@@ -53,7 +60,7 @@ def extract_image_text_with_openrouter_vision(image_or_path: Image.Image | Path,
             "temperature": 0,
             "max_tokens": VISION_MAX_OUTPUT_TOKENS,
         }
-        text = _openrouter_vision_chat(image_or_path, payload, source_name)
+        text = _openrouter_vision_chat(image_or_path, payload, source_name, db=db, tenant_id=tenant_id)
         if text:
             logger.info("OpenRouter vision extracted %s characters from %s", len(text), source_name)
         return text
@@ -65,6 +72,8 @@ def extract_image_text_with_openrouter_vision(image_or_path: Image.Image | Path,
 def extract_catalog_items_from_image_with_openrouter_vision(
     image_or_path: Image.Image | Path,
     source_name: str = "image",
+    db: Any | None = None,
+    tenant_id: Any | None = None,
 ) -> list[ExtractedCatalogItem]:
     """Extract catalogue item JSON directly from a direct image attachment."""
     try:
@@ -91,7 +100,7 @@ def extract_catalog_items_from_image_with_openrouter_vision(
             "max_tokens": VISION_MAX_OUTPUT_TOKENS,
             "response_format": {"type": "json_object"},
         }
-        content = _openrouter_vision_chat(image_or_path, payload, source_name)
+        content = _openrouter_vision_chat(image_or_path, payload, source_name, db=db, tenant_id=tenant_id)
         if not content:
             return []
         data = _parse_json_response(content)
@@ -109,23 +118,27 @@ def extract_catalog_items_from_image_with_openrouter_vision(
         return []
 
 
-def _openrouter_vision_chat(image_or_path: Image.Image | Path, payload: dict, source_name: str) -> str:
+def _openrouter_vision_chat(
+    image_or_path: Image.Image | Path,
+    payload: dict,
+    source_name: str,
+    db: Any | None = None,
+    tenant_id: Any | None = None,
+) -> str:
     settings = get_settings()
-    if not settings.openrouter_api_key:
-        return ""
-
-    model = settings.openrouter_vision_model or settings.openrouter_model
-    if not model:
+    tenant_config = get_tenant_openrouter_config(db, tenant_id)
+    if tenant_config is None:
+        logger.warning("OpenRouter vision skipped for %s: tenant OpenRouter settings are not configured", source_name)
         return ""
 
     image_bytes = _image_to_jpeg_bytes(image_or_path)
     data_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")
     payload = dict(payload)
-    payload["model"] = model
+    payload["model"] = tenant_config.vision_model
     payload["messages"] = _inject_image_url(payload["messages"], data_url)
 
     headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Authorization": f"Bearer {tenant_config.api_key}",
         "Content-Type": "application/json",
         "Connection": "close",
     }

@@ -10,12 +10,20 @@ from pydantic import BaseModel, EmailStr, field_validator
 
 from backend.app.db import get_db, get_supabase, SessionLocal
 from backend.app.auth import get_current_admin, get_current_user
-from backend.app.models import Profile, Supplier, CatalogItem, CatalogEmail, EmployeeInvitation, PasswordReset, EmailAccount, AIQueryLog
-from backend.app.services.email_sender import send_smtp_email
+from backend.app.models import Profile, Supplier, CatalogItem, CatalogEmail, EmployeeInvitation, PasswordReset, EmailAccount, AIQueryLog, TenantAISetting
+from backend.app.services.email_sender import send_transactional_email
 from backend.app.config import get_settings
 from backend.app.security import escape_html
 from backend.app.schemas import validate_password_strength
 from backend.app.rate_limiter import rate_limit_dependency
+from backend.app.services.tenant_ai_settings import (
+    DEFAULT_OPENROUTER_TEXT_MODEL,
+    DEFAULT_OPENROUTER_VISION_MODEL,
+    OPENROUTER_PROVIDER,
+    encrypt_ai_api_key,
+    validate_openrouter_api_key,
+    validate_openrouter_model,
+)
 from fastapi import BackgroundTasks
 
 router = APIRouter()
@@ -44,6 +52,37 @@ class CompleteActivationRequest(BaseModel):
     @classmethod
     def validate_pwd(cls, v: str) -> str:
         return validate_password_strength(v)
+
+
+class AdminAISettingsResponse(BaseModel):
+    provider: str = OPENROUTER_PROVIDER
+    has_api_key: bool
+    api_key_last4: str | None = None
+    vision_model: str
+    text_model: str
+
+
+class AdminAISettingsUpdateRequest(BaseModel):
+    api_key: str | None = None
+    vision_model: str
+    text_model: str
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return validate_openrouter_api_key(value)
+
+    @field_validator("vision_model")
+    @classmethod
+    def validate_vision_model(cls, value: str) -> str:
+        return validate_openrouter_model(value, "Vision model")
+
+    @field_validator("text_model")
+    @classmethod
+    def validate_text_model(cls, value: str) -> str:
+        return validate_openrouter_model(value, "Text model")
 
 
 def token_digest(token: str) -> str:
@@ -127,11 +166,77 @@ def get_database_stats(db: Session = Depends(get_db), current_user: dict = Depen
         "searches_per_month": searches_month
     }
 
+
+@router.get("/ai-settings", response_model=AdminAISettingsResponse)
+def get_ai_settings(db: Session = Depends(get_db), current_user: dict = Depends(get_current_admin)):
+    tenant_uuid = UUID(current_user["tenant_id"])
+    setting = db.query(TenantAISetting).filter(TenantAISetting.tenant_id == tenant_uuid).first()
+    return AdminAISettingsResponse(
+        has_api_key=bool(setting and setting.encrypted_api_key),
+        api_key_last4=setting.api_key_last4 if setting else None,
+        vision_model=setting.vision_model if setting else DEFAULT_OPENROUTER_VISION_MODEL,
+        text_model=setting.text_model if setting else DEFAULT_OPENROUTER_TEXT_MODEL,
+    )
+
+
+@router.put("/ai-settings", response_model=AdminAISettingsResponse)
+def update_ai_settings(
+    payload: AdminAISettingsUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_admin),
+):
+    tenant_uuid = UUID(current_user["tenant_id"])
+    admin_uuid = UUID(current_user["id"])
+    setting = db.query(TenantAISetting).filter(TenantAISetting.tenant_id == tenant_uuid).first()
+
+    if setting is None and not payload.api_key:
+        raise HTTPException(status_code=400, detail="OpenRouter API key is required before saving tenant AI settings.")
+
+    if setting is None:
+        setting = TenantAISetting(
+            tenant_id=tenant_uuid,
+            provider=OPENROUTER_PROVIDER,
+            vision_model=payload.vision_model,
+            text_model=payload.text_model,
+            updated_by=admin_uuid,
+        )
+        db.add(setting)
+
+    setting.provider = OPENROUTER_PROVIDER
+    setting.vision_model = payload.vision_model
+    setting.text_model = payload.text_model
+    setting.updated_by = admin_uuid
+
+    if payload.api_key:
+        try:
+            setting.encrypted_api_key = encrypt_ai_api_key(payload.api_key)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        setting.api_key_last4 = payload.api_key[-4:]
+
+    db.commit()
+    db.refresh(setting)
+
+    return AdminAISettingsResponse(
+        has_api_key=bool(setting.encrypted_api_key),
+        api_key_last4=setting.api_key_last4,
+        vision_model=setting.vision_model,
+        text_model=setting.text_model,
+    )
+
 class AdminRegisterRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
     organisation: str
+
+    @field_validator("name", "organisation")
+    @classmethod
+    def validate_required_text(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("Name and workspace name are required.")
+        return cleaned
 
     @field_validator("password")
     @classmethod
@@ -144,25 +249,36 @@ class AdminRegisterRequest(BaseModel):
     dependencies=[Depends(rate_limit_dependency(max_requests=5, window_seconds=600, scope="admin_register"))],
 )
 def register_admin(payload: AdminRegisterRequest, db: Session = Depends(get_db)):
+    org_name = payload.organisation.strip()
+    email = str(payload.email).strip().lower()
+
     # Verify that organisation does not already exist in database profiles
-    existing_org = db.query(Profile).filter(Profile.organisation == payload.organisation).first()
+    existing_org = db.query(Profile).filter(func.lower(func.trim(Profile.organisation)) == org_name.lower()).first()
     if existing_org:
-        logger.info("Registration rejected: organisation '%s' already exists", payload.organisation)
+        logger.info("Registration rejected: organisation '%s' already exists", org_name)
         raise HTTPException(
             status_code=400,
-            detail="Unable to register workspace with the provided details. Please check the information or contact support.",
+            detail="A workspace or account with these details is already registered. Use a different email/workspace name or ask the superadmin to approve the existing request.",
+        )
+
+    existing_user_id = db.execute(text("SELECT id FROM auth.users WHERE LOWER(email) = LOWER(:email)"), {"email": email}).scalar()
+    if existing_user_id:
+        logger.info("Registration rejected: email '%s' already exists", email)
+        raise HTTPException(
+            status_code=400,
+            detail="A workspace or account with these details is already registered. Use a different email/workspace name or ask the superadmin to approve the existing request.",
         )
 
     try:
         supabase_client = get_supabase()
         attributes = {
-            "email": payload.email,
+            "email": email,
             "password": payload.password,
             "email_confirm": True, # Auto-confirms email address (skips verification link)
             "user_metadata": {
                 "full_name": payload.name.strip(),
                 "role": "admin",
-                "organisation": payload.organisation.strip()
+                "organisation": org_name
             }
         }
         supabase_client.auth.admin.create_user(attributes)
@@ -173,7 +289,7 @@ def register_admin(payload: AdminRegisterRequest, db: Session = Depends(get_db))
         if "already exists" in err_msg.lower() or "unique" in err_msg.lower():
             raise HTTPException(
                 status_code=400,
-                detail="Unable to register workspace with the provided details. Please check the information or contact support.",
+                detail="A workspace or account with these details is already registered. Use a different email/workspace name or ask the superadmin to approve the existing request.",
             )
         raise HTTPException(status_code=500, detail="Failed to create admin workspace registration.")
 
@@ -244,12 +360,12 @@ def invite_employee(
     </div>
     """
 
-    email_sent = send_smtp_email(payload.email, "You're invited to join MediCORE", email_html)
+    email_sent = send_transactional_email(payload.email, "You're invited to join MediCORE", email_html)
     if not email_sent:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Invitation email could not be sent. Please check SMTP/network configuration and try again.",
+            detail="Invitation email could not be sent. Refresh the Gmail connection and try again.",
         )
 
     db.commit()
@@ -565,7 +681,7 @@ def reset_password(
     </div>
     """
 
-    email_sent = send_smtp_email(user_email, "Reset your MediCORE password", email_html)
+    email_sent = send_transactional_email(user_email, "Reset your MediCORE password", email_html)
     if not email_sent:
         db.rollback()
         raise HTTPException(

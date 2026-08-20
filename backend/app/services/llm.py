@@ -5,12 +5,14 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
+from uuid import UUID
 
 import httpx
 
 from backend.app.config import get_settings
 from backend.app.schemas import ExtractedCatalogItem, QueryPlan
 from backend.app.services.sanitizer import wrap_llm_untrusted_content
+from backend.app.services.tenant_ai_settings import get_tenant_openrouter_config
 
 logger = logging.getLogger(__name__)
 
@@ -54,31 +56,64 @@ class ModelProviderConfig:
 
 
 class ModelRouterClient:
-    def __init__(self) -> None:
+    def __init__(self, db: Any | None = None) -> None:
+        self.db = db
         settings = get_settings()
+        self.cerebras_provider = ModelProviderConfig(
+            name="cerebras",
+            api_key=settings.cerebras_api_key,
+            model=settings.cerebras_model,
+            base_url=settings.cerebras_base_url.rstrip("/"),
+            max_tokens_field="max_completion_tokens",
+            max_output_tokens=8192,
+        )
+        self.openrouter_fallback_provider = ModelProviderConfig(
+            name="openrouter",
+            api_key=settings.openrouter_api_key,
+            model=settings.openrouter_model,
+            base_url=settings.openrouter_base_url.rstrip("/"),
+            max_tokens_field="max_tokens",
+            max_output_tokens=4000,
+            site_url=settings.openrouter_site_url or settings.frontend_origin,
+            app_name=settings.openrouter_app_name or settings.app_name,
+        )
         self.providers = [
-            ModelProviderConfig(
-                name="cerebras",
-                api_key=settings.cerebras_api_key,
-                model=settings.cerebras_model,
-                base_url=settings.cerebras_base_url.rstrip("/"),
-                max_tokens_field="max_completion_tokens",
-                max_output_tokens=8192,
-            ),
-            ModelProviderConfig(
-                name="openrouter",
-                api_key=settings.openrouter_api_key,
-                model=settings.openrouter_model,
-                base_url=settings.openrouter_base_url.rstrip("/"),
-                max_tokens_field="max_tokens",
-                max_output_tokens=4000,
-                site_url=settings.openrouter_site_url or settings.frontend_origin,
-                app_name=settings.openrouter_app_name or settings.app_name,
-            ),
+            self.cerebras_provider,
+            self.openrouter_fallback_provider,
         ]
 
-    def _available_providers(self) -> list[ModelProviderConfig]:
-        return [provider for provider in self.providers if provider.api_key]
+    def _tenant_openrouter_provider(self, tenant_id: UUID | str | None) -> ModelProviderConfig | None:
+        if tenant_id is None:
+            return None
+        tenant_config = get_tenant_openrouter_config(getattr(self, "db", None), tenant_id)
+        if tenant_config is None:
+            return None
+        settings = get_settings()
+        return ModelProviderConfig(
+            name="openrouter",
+            api_key=tenant_config.api_key,
+            model=tenant_config.text_model,
+            base_url=settings.openrouter_base_url.rstrip("/"),
+            max_tokens_field="max_tokens",
+            max_output_tokens=4000,
+            site_url=settings.openrouter_site_url or settings.frontend_origin,
+            app_name=settings.openrouter_app_name or settings.app_name,
+        )
+
+    def _available_providers(self, tenant_id: UUID | str | None = None) -> list[ModelProviderConfig]:
+        if not hasattr(self, "cerebras_provider"):
+            return [provider for provider in getattr(self, "providers", []) if provider.api_key]
+        tenant_openrouter = self._tenant_openrouter_provider(tenant_id)
+        providers = [
+            provider
+            for provider in (
+                tenant_openrouter,
+                self.cerebras_provider,
+                self.openrouter_fallback_provider if tenant_id is None and tenant_openrouter is None else None,
+            )
+            if provider and provider.api_key
+        ]
+        return providers
 
     def _headers(self, provider: ModelProviderConfig) -> dict[str, str]:
         headers = {
@@ -230,8 +265,9 @@ class ModelRouterClient:
         json_mode: bool = False,
         validate: Callable[[str], None] | None = None,
         provider_names: tuple[str, ...] | None = None,
+        tenant_id: UUID | str | None = None,
     ) -> str:
-        providers = self._available_providers()
+        providers = self._available_providers(tenant_id=tenant_id)
         if provider_names is not None:
             allowed = set(provider_names)
             providers = [provider for provider in providers if provider.name in allowed]
@@ -267,7 +303,14 @@ class ModelRouterClient:
             raise TokenLimitReachedError("Token Limit Reached") from last_error
         raise last_error
 
-    def _json_chat(self, system: str, user: str, *, provider_names: tuple[str, ...] | None = None) -> dict[str, Any]:
+    def _json_chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        provider_names: tuple[str, ...] | None = None,
+        tenant_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
         parsed_payload: dict[str, Any] | None = None
 
         def validate_json(content: str) -> None:
@@ -283,10 +326,11 @@ class ModelRouterClient:
             json_mode=True,
             validate=validate_json,
             provider_names=provider_names,
+            tenant_id=tenant_id,
         )
         return parsed_payload or self._parse_json_response(content)
 
-    def personal_assistant_answer(self, question: str) -> str:
+    def personal_assistant_answer(self, question: str, tenant_id: UUID | str | None = None) -> str:
         """Answer a general question without placing private data in context."""
         return self._chat(
             [
@@ -294,6 +338,7 @@ class ModelRouterClient:
                 {"role": "user", "content": question},
             ],
             temperature=0.4,
+            tenant_id=tenant_id,
         ).strip()
 
     def _parse_json_response(self, content: str) -> dict[str, Any]:
@@ -396,13 +441,18 @@ class ModelRouterClient:
                     return content[start : index + 1]
         return ""
 
-    def extract_catalog_items(self, pdf_text: str, reference_date: datetime | None = None) -> list[ExtractedCatalogItem]:
+    def extract_catalog_items(
+        self,
+        pdf_text: str,
+        reference_date: datetime | None = None,
+        tenant_id: UUID | str | None = None,
+    ) -> list[ExtractedCatalogItem]:
         extracted: list[ExtractedCatalogItem] = []
         seen: set[tuple] = set()
         chunks = self._chunk_text(pdf_text)
         for chunk_index, chunk in enumerate(chunks, start=1):
             try:
-                chunk_items = self._extract_catalog_items_chunk(chunk, reference_date=reference_date)
+                chunk_items = self._extract_catalog_items_chunk(chunk, reference_date=reference_date, tenant_id=tenant_id)
             except Exception:
                 logger.exception(
                     "LLM extraction failed for chunk %s/%s; continuing with remaining chunks",
@@ -427,10 +477,15 @@ class ModelRouterClient:
                 extracted.append(item)
         return extracted
 
-    def _extract_catalog_items_chunk(self, pdf_text: str, reference_date: datetime | None = None) -> list[ExtractedCatalogItem]:
+    def _extract_catalog_items_chunk(
+        self,
+        pdf_text: str,
+        reference_date: datetime | None = None,
+        tenant_id: UUID | str | None = None,
+    ) -> list[ExtractedCatalogItem]:
         system = self._catalogue_extraction_system_prompt(reference_date)
         safe_user_prompt = wrap_llm_untrusted_content(pdf_text)
-        payload = self._json_chat(system, safe_user_prompt)
+        payload = self._json_chat(system, safe_user_prompt, tenant_id=tenant_id)
         extracted = []
         for item in payload.get("items", []):
             try:
@@ -504,7 +559,7 @@ class ModelRouterClient:
             chunks.append(chunk_str)
         return chunks
 
-    def generate_sql(self, question: str) -> str:
+    def generate_sql(self, question: str, tenant_id: UUID | str | None = None) -> str:
         system = (
             "You are a PostgreSQL SQL generator for a supplier catalog procurement database on Supabase Cloud. "
             "Your task is to analyze the user's natural-language query and generate a single, highly efficient, read-only SQL query.\n\n"
@@ -530,13 +585,14 @@ class ModelRouterClient:
                 {"role": "user", "content": question},
             ],
             temperature=0,
+            tenant_id=tenant_id,
         )
         sql = self._strip_json_fences(content).strip()
         sql = re.sub(r"^```(?:sql)?\s*", "", sql, flags=re.IGNORECASE)
         sql = re.sub(r"\s*```$", "", sql).strip()
         return sql
 
-    def plan_query(self, question: str) -> QueryPlan:
+    def plan_query(self, question: str, tenant_id: UUID | str | None = None) -> QueryPlan:
         system = (
             "You produce safe JSON query plans for a supplier catalogue database. "
             "Allowed operations:\n"
@@ -558,10 +614,15 @@ class ModelRouterClient:
             "Example output for 'Compare citric acid':\n"
             "{\"operation\": \"supplier_compare\", \"ingredient_name\": \"citric acid\", \"min_quantity\": null, \"unit\": null, \"semantic_query\": null, \"limit\": 10}"
         )
-        payload = self._json_chat(system, question)
+        payload = self._json_chat(system, question, tenant_id=tenant_id)
         return QueryPlan.model_validate(payload)
 
-    def summarize_answer(self, question: str, rows: list[dict[str, Any]]) -> str:
+    def summarize_answer(
+        self,
+        question: str,
+        rows: list[dict[str, Any]],
+        tenant_id: UUID | str | None = None,
+    ) -> str:
         compact_rows = [
             {
                 "supplier": row.get("supplier_name"),
@@ -604,6 +665,7 @@ class ModelRouterClient:
                 {"role": "user", "content": json.dumps({"question": question, "rows": compact_rows}, default=str)},
             ],
             temperature=0.3,
+            tenant_id=tenant_id,
         ) or "No answer generated."
 
     def _display_item_name(self, row: dict[str, Any]) -> str | None:

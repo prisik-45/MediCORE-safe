@@ -207,7 +207,7 @@ class EmailIngestionService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.settings = get_settings()
-        self.llm = OpenRouterClient()
+        self.llm = OpenRouterClient(db=db)
         logger.info("MediCORE extraction engine ready: parser=%s", CATALOG_TABLE_PARSER_VERSION)
 
     def _extract_sender(self, message: Message) -> tuple[str, str]:
@@ -443,7 +443,7 @@ class EmailIngestionService:
                     uploaded_url, object_path = self._upload_file(file_path, raw_email_id, mime_type)
 
                     if ext in IMAGE_ATTACHMENT_EXTENSIONS:
-                        image_items = self._extract_catalogue_items_from_image(file_path)
+                        image_items = self._extract_catalogue_items_from_image(file_path, tenant_id=active_tenant_id)
                         if image_items:
                             logger.info(
                                 "Image catalogue vision returned %s validated item(s); bypassing parser/LLM for %s",
@@ -469,7 +469,7 @@ class EmailIngestionService:
                         )
 
                     try:
-                        text = self._extract_text_from_file(file_path, ext)
+                        text = self._extract_text_from_file(file_path, ext, tenant_id=active_tenant_id)
                     except Exception as text_exc:
                         text = ""
                         logger.warning("Failed extracting text from %s: %s", target_name, text_exc, exc_info=True)
@@ -508,7 +508,7 @@ class EmailIngestionService:
                             logger.info("Skipping non-catalogue document %s after classification", target_name)
                             continue
 
-                        text = self._extract_catalogue_text_from_file(file_path, ext, text)
+                        text = self._extract_catalogue_text_from_file(file_path, ext, text, tenant_id=active_tenant_id)
                         logger.info("Catalogue extraction text for %s has %s characters", target_name, len(text))
                     else:
                         logger.info("Skipping document classifier for non-PDF attachment %s", target_name)
@@ -520,6 +520,7 @@ class EmailIngestionService:
                         text,
                         target_name,
                         reference_date=catalog_email.received_at,
+                        tenant_id=active_tenant_id,
                     )
                     count += self._store_catalog_items(
                         catalog_email,
@@ -552,6 +553,7 @@ class EmailIngestionService:
                         combined_body,
                         "email_body",
                         reference_date=catalog_email.received_at,
+                        tenant_id=active_tenant_id,
                     )
                     if extracted_from_body:
                         count += self._store_catalog_items(
@@ -684,7 +686,7 @@ class EmailIngestionService:
                     ).delete(synchronize_session=False)
 
                 if ext in IMAGE_ATTACHMENT_EXTENSIONS:
-                    image_items = self._extract_catalogue_items_from_image(file_path)
+                    image_items = self._extract_catalogue_items_from_image(file_path, tenant_id=catalog_email.tenant_id)
                     if image_items:
                         image_text = self._catalogue_item_evidence_text(image_items)
                         stored = self._store_catalog_items(catalog_email, supplier, image_items, image_text, tenant_id=catalog_email.tenant_id)
@@ -700,7 +702,7 @@ class EmailIngestionService:
                         catalog_email.raw_email_id,
                     )
 
-                text = self._extract_text_from_file(file_path, ext)
+                text = self._extract_text_from_file(file_path, ext, tenant_id=catalog_email.tenant_id)
                 logger.info("Extracted %s characters while reprocessing email id=%s", len(text), catalog_email.raw_email_id)
                 if ext in CLASSIFIABLE_DOCUMENT_EXTENSIONS:
                     classification = self._classify_document(file_path.name, ext, text)
@@ -712,7 +714,7 @@ class EmailIngestionService:
                             classification.category,
                         )
                         continue
-                    text = self._extract_catalogue_text_from_file(file_path, ext, text)
+                    text = self._extract_catalogue_text_from_file(file_path, ext, text, tenant_id=catalog_email.tenant_id)
                     logger.info("Catalogue reprocess text for email id=%s has %s characters", catalog_email.raw_email_id, len(text))
                 else:
                     logger.info("Skipping document classifier for non-PDF reprocess %s", catalog_email.raw_email_id)
@@ -720,6 +722,7 @@ class EmailIngestionService:
                     text,
                     str(catalog_email.id),
                     reference_date=catalog_email.received_at,
+                    tenant_id=catalog_email.tenant_id,
                 )
                 stored = self._store_catalog_items(catalog_email, supplier, extracted, text, tenant_id=catalog_email.tenant_id)
                 processed += stored
@@ -740,6 +743,7 @@ class EmailIngestionService:
         text: str,
         source_name: str,
         reference_date: datetime | None = None,
+        tenant_id: Any | None = None,
     ):
         if not text.strip():
             logger.info("No text available for %s", source_name)
@@ -786,7 +790,14 @@ class EmailIngestionService:
             return parsed
 
         try:
-            llm_items = [normalize_item(item) for item in self.llm.extract_catalog_items(text, reference_date=reference_date)]
+            llm_items = [
+                normalize_item(item)
+                for item in self.llm.extract_catalog_items(
+                    text,
+                    reference_date=reference_date,
+                    tenant_id=tenant_id,
+                )
+            ]
             extracted = self._dedupe_extracted_items([*parsed, *llm_items])
             logger.info("LLM fallback extracted %s catalogue row(s) from %s", len(extracted), source_name)
             return extracted
@@ -2720,13 +2731,18 @@ class EmailIngestionService:
             previous_blank = False
         return "\n".join(lines).strip()
 
-    def _extract_image_text(self, file_path: Path) -> str:
+    def _extract_image_text(self, file_path: Path, tenant_id: Any | None = None) -> str:
         from PIL import Image
 
         try:
             from backend.app.services.vision_extraction import extract_image_text_with_openrouter_vision
 
-            vision_text = extract_image_text_with_openrouter_vision(file_path, source_name=file_path.name)
+            vision_text = extract_image_text_with_openrouter_vision(
+                file_path,
+                source_name=file_path.name,
+                db=self.db,
+                tenant_id=tenant_id,
+            )
             if vision_text:
                 return "[OPENROUTER VISION OCR]\n" + vision_text
 
@@ -2756,10 +2772,10 @@ class EmailIngestionService:
             logger.exception("Error doing RapidOCR OCR on image %s: %s", file_path.name, e)
             return ""
 
-    def _extract_text_from_file(self, file_path: Path, ext: str) -> str:
+    def _extract_text_from_file(self, file_path: Path, ext: str, tenant_id: Any | None = None) -> str:
         if ext == ".pdf":
             from backend.app.services.pdf_extract import extract_pdf_text
-            return extract_pdf_text(file_path, use_vision_as_ocr_fallback=True)
+            return extract_pdf_text(file_path, use_vision_as_ocr_fallback=True, db=self.db, tenant_id=tenant_id)
 
         elif ext in (".xlsx", ".xls", ".xlsm", ".xltx", ".xltm"):
             return self._extract_spreadsheet_text(file_path, ext)
@@ -2774,7 +2790,7 @@ class EmailIngestionService:
             return self._extract_word_text(file_path, ext)
 
         elif ext in IMAGE_ATTACHMENT_EXTENSIONS:
-            return self._extract_image_text(file_path)
+            return self._extract_image_text(file_path, tenant_id=tenant_id)
 
         elif ext == ".txt":
             try:
@@ -2783,19 +2799,34 @@ class EmailIngestionService:
                 return ""
         return ""
 
-    def _extract_catalogue_text_from_file(self, file_path: Path, ext: str, existing_text: str) -> str:
+    def _extract_catalogue_text_from_file(
+        self,
+        file_path: Path,
+        ext: str,
+        existing_text: str,
+        tenant_id: Any | None = None,
+    ) -> str:
         if ext != ".pdf":
             return existing_text
 
         from backend.app.services.pdf_extract import extract_pdf_text
 
-        catalogue_text = extract_pdf_text(file_path, use_vision_for_images=True)
+        catalogue_text = extract_pdf_text(file_path, use_vision_for_images=True, db=self.db, tenant_id=tenant_id)
         return catalogue_text or existing_text
 
-    def _extract_catalogue_items_from_image(self, file_path: Path) -> list[ExtractedCatalogItem]:
+    def _extract_catalogue_items_from_image(
+        self,
+        file_path: Path,
+        tenant_id: Any | None = None,
+    ) -> list[ExtractedCatalogItem]:
         from backend.app.services.vision_extraction import extract_catalog_items_from_image_with_openrouter_vision
 
-        items = extract_catalog_items_from_image_with_openrouter_vision(file_path, source_name=file_path.name)
+        items = extract_catalog_items_from_image_with_openrouter_vision(
+            file_path,
+            source_name=file_path.name,
+            db=self.db,
+            tenant_id=tenant_id,
+        )
         normalized = [normalize_item(item) for item in items]
         return self._dedupe_extracted_items(normalized)
 

@@ -27,7 +27,8 @@ import {
   LayoutDashboard,
   LogOut,
   Settings,
-  Menu
+  Menu,
+  KeyRound
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -54,7 +55,16 @@ interface Employee {
   last_sync: string;
 }
 
+interface AISettings {
+  provider: string;
+  has_api_key: boolean;
+  api_key_last4?: string | null;
+  vision_model: string;
+  text_model: string;
+}
+
 type AdminTab = "dashboard" | "employees" | "database" | "settings";
+type SettingsTab = "profile" | "api_key";
 
 export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?: string[] }> }) {
   const resolvedParams = use(params);
@@ -246,7 +256,17 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
 
   // Layout replication states
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [settingsActiveTab, setSettingsActiveTab] = useState<"profile">("profile");
+  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTab>("profile");
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false);
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(false);
+  const [aiSettingsSaving, setAiSettingsSaving] = useState(false);
+  const [aiSettingsError, setAiSettingsError] = useState<string | null>(null);
+  const [aiSettingsSuccess, setAiSettingsSuccess] = useState(false);
+  const [openRouterApiKey, setOpenRouterApiKey] = useState("");
+  const [openRouterKeyLast4, setOpenRouterKeyLast4] = useState<string | null>(null);
+  const [openRouterHasKey, setOpenRouterHasKey] = useState(false);
+  const [visionModel, setVisionModel] = useState("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free");
+  const [textModel, setTextModel] = useState("openai/gpt-4o-mini");
   const [visibleGuides, setVisibleGuides] = useState({
     profile_tab_desc: false,
     profile_org: false,
@@ -319,6 +339,63 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
     }
   }
 
+  async function fetchAISettings() {
+    setAiSettingsLoading(true);
+    setAiSettingsError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const response = await authFetch(`${getApiUrl()}/api/admin/ai-settings`);
+      if (!response.ok) throw new Error("Failed to load OpenRouter settings.");
+      const data: AISettings = await response.json();
+      setOpenRouterHasKey(data.has_api_key);
+      setOpenRouterKeyLast4(data.api_key_last4 || null);
+      setVisionModel(data.vision_model || "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free");
+      setTextModel(data.text_model || "openai/gpt-4o-mini");
+      setOpenRouterApiKey("");
+      setAiSettingsLoaded(true);
+    } catch (err: any) {
+      setAiSettingsError(err.message || "Failed to load OpenRouter settings.");
+    } finally {
+      setAiSettingsLoading(false);
+    }
+  }
+
+  async function handleSaveAISettings(e: React.FormEvent) {
+    e.preventDefault();
+    setAiSettingsSaving(true);
+    setAiSettingsError(null);
+    setAiSettingsSuccess(false);
+    try {
+      const payload = {
+        api_key: openRouterApiKey.trim() || null,
+        vision_model: visionModel.trim(),
+        text_model: textModel.trim(),
+      };
+      const response = await authFetch(`${getApiUrl()}/api/admin/ai-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || "Failed to save OpenRouter settings.");
+      }
+      const data: AISettings = await response.json();
+      setOpenRouterHasKey(data.has_api_key);
+      setOpenRouterKeyLast4(data.api_key_last4 || null);
+      setVisionModel(data.vision_model);
+      setTextModel(data.text_model);
+      setOpenRouterApiKey("");
+      setAiSettingsSuccess(true);
+      setTimeout(() => setAiSettingsSuccess(false), 3000);
+    } catch (err: any) {
+      setAiSettingsError(err.message || "Failed to save OpenRouter settings.");
+    } finally {
+      setAiSettingsSaving(false);
+    }
+  }
+
   // Trigger data fetches on tab change if not already loaded
   useEffect(() => {
     if (activeTab === "dashboard" && !dashboardStats) {
@@ -331,6 +408,12 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       fetchProfile();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === "settings" && settingsActiveTab === "api_key" && !aiSettingsLoaded) {
+      fetchAISettings();
+    }
+  }, [activeTab, settingsActiveTab, aiSettingsLoaded]);
 
   // Handle Invitation
   async function handleInvite(e: React.FormEvent) {
@@ -923,6 +1006,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
 
           {[
             { id: "profile", label: "Profile & Preferences", icon: <Users size={16} /> },
+            { id: "api_key", label: "API Key", icon: <KeyRound size={16} /> },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1152,6 +1236,148 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {settingsActiveTab === "api_key" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
+              <div style={{ borderBottom: "1px solid var(--line)", paddingBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <h2 style={{ margin: 0, fontSize: "22px", fontWeight: 600, color: "#092f28", letterSpacing: "-0.3px" }}>OpenRouter API Key</h2>
+                </div>
+              </div>
+
+              {aiSettingsLoading ? (
+                <Loader variant="tab" />
+              ) : (
+                <form onSubmit={handleSaveAISettings} style={{ display: "flex", flexDirection: "column", gap: "18px", maxWidth: "720px" }}>
+                  {aiSettingsError && (
+                    <div style={{
+                      background: "#fdf2f2",
+                      border: "1px solid #fde8e8",
+                      borderRadius: "8px",
+                      padding: "10px 14px",
+                      color: "#9b1c1c",
+                      fontSize: "13px",
+                    }}>
+                      {aiSettingsError}
+                    </div>
+                  )}
+
+                  {aiSettingsSuccess && (
+                    <div style={{
+                      background: "#f0fdf4",
+                      border: "1px solid #dcfce7",
+                      borderRadius: "8px",
+                      padding: "10px 14px",
+                      color: "#16a34a",
+                      fontSize: "13px",
+                    }}>
+                      OpenRouter settings saved.
+                    </div>
+                  )}
+
+                  <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: "10px", padding: "20px", display: "flex", flexDirection: "column", gap: "18px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", paddingBottom: "12px", borderBottom: "1px solid var(--line)" }}>
+                      <div>
+                        <strong style={{ display: "block", fontSize: "14px", color: "var(--ink)" }}>Provider</strong>
+                        <span style={{ fontSize: "12.5px", color: "var(--muted)" }}>OpenRouter</span>
+                      </div>
+                      <span style={{
+                        padding: "4px 12px",
+                        background: openRouterHasKey ? "rgba(15, 122, 95, 0.08)" : "#f9fafb",
+                        color: openRouterHasKey ? "var(--accent)" : "var(--muted)",
+                        borderRadius: "20px",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase"
+                      }}>
+                        {openRouterHasKey && openRouterKeyLast4 ? `saved ****${openRouterKeyLast4}` : "not saved"}
+                      </span>
+                    </div>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--ink)" }}>API Key</span>
+                      <input
+                        type="password"
+                        value={openRouterApiKey}
+                        onChange={(e) => setOpenRouterApiKey(e.target.value)}
+                        placeholder={openRouterHasKey ? "Leave blank to keep existing key" : "OpenRouter API key"}
+                        autoComplete="off"
+                        disabled={aiSettingsSaving}
+                        style={{
+                          padding: "10px 12px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--line)",
+                          fontSize: "14px",
+                          color: "var(--ink)",
+                          outline: "none",
+                          width: "100%",
+                        }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--ink)" }}>Vision Model</span>
+                      <input
+                        type="text"
+                        value={visionModel}
+                        onChange={(e) => setVisionModel(e.target.value)}
+                        disabled={aiSettingsSaving}
+                        style={{
+                          padding: "10px 12px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--line)",
+                          fontSize: "14px",
+                          color: "var(--ink)",
+                          outline: "none",
+                          width: "100%",
+                        }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--ink)" }}>Text Model</span>
+                      <input
+                        type="text"
+                        value={textModel}
+                        onChange={(e) => setTextModel(e.target.value)}
+                        disabled={aiSettingsSaving}
+                        style={{
+                          padding: "10px 12px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--line)",
+                          fontSize: "14px",
+                          color: "var(--ink)",
+                          outline: "none",
+                          width: "100%",
+                        }}
+                      />
+                    </label>
+
+                    <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: "4px" }}>
+                      <button
+                        type="submit"
+                        disabled={aiSettingsSaving}
+                        style={{
+                          background: "var(--accent)",
+                          color: "#fff",
+                          border: "none",
+                          padding: "9px 16px",
+                          borderRadius: "6px",
+                          fontSize: "13px",
+                          fontWeight: 600,
+                          cursor: aiSettingsSaving ? "not-allowed" : "pointer",
+                          opacity: aiSettingsSaving ? 0.7 : 1,
+                        }}
+                      >
+                        {aiSettingsSaving ? "Saving..." : "Save"}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
             </div>
           )}
         </main>

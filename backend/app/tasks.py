@@ -84,8 +84,8 @@ def process_gmail_notification(payload: dict) -> dict:
 
 @celery_app.task(name="backend.app.tasks.send_transactional_email")
 def send_transactional_email(to_email: str, subject: str, html_content: str) -> bool:
-    from backend.app.services.email_sender import send_smtp_email
-    return send_smtp_email(to_email, subject, html_content)
+    from backend.app.services.email_sender import send_transactional_email
+    return send_transactional_email(to_email, subject, html_content)
 
 
 

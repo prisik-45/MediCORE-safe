@@ -36,6 +36,8 @@ class PdfExtractServiceTest(unittest.TestCase):
             Path("sample.pdf"),
             use_vision_for_pdf_images=False,
             use_vision_as_pdf_ocr_fallback=False,
+            db=None,
+            tenant_id=None,
         )
         self.assertIn("Vitamin C | USD 5/kg", text)
 

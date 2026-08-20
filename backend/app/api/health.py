@@ -1,9 +1,18 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.app.config import get_settings
 from backend.app.db import get_db
 from backend.app.auth import get_current_user
+from backend.app.models import TenantAISetting
+from backend.app.services.tenant_ai_settings import (
+    DEFAULT_OPENROUTER_TEXT_MODEL,
+    DEFAULT_OPENROUTER_VISION_MODEL,
+    OPENROUTER_PROVIDER,
+    ai_settings_tenant_id,
+)
 
 router = APIRouter()
 
@@ -12,6 +21,14 @@ from pydantic import BaseModel
 
 class ProfileUpdateRequest(BaseModel):
     full_name: str
+
+
+class CurrentAISettingsResponse(BaseModel):
+    provider: str = OPENROUTER_PROVIDER
+    has_api_key: bool
+    api_key_last4: str | None = None
+    vision_model: str
+    text_model: str
 
 @router.get("/health")
 def health() -> dict[str, str]:
@@ -45,6 +62,22 @@ def get_user_profile(
         "status": "Active",
         "email": current_user.get("email")
     }
+
+
+@router.get("/api/ai-settings/current", response_model=CurrentAISettingsResponse)
+def get_current_ai_settings(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> CurrentAISettingsResponse:
+    tenant_uuid = UUID(current_user["tenant_id"])
+    settings_tenant_id = ai_settings_tenant_id(db, tenant_uuid)
+    setting = db.query(TenantAISetting).filter(TenantAISetting.tenant_id == settings_tenant_id).first()
+    return CurrentAISettingsResponse(
+        has_api_key=bool(setting and setting.encrypted_api_key),
+        api_key_last4=setting.api_key_last4 if setting else None,
+        vision_model=setting.vision_model if setting else DEFAULT_OPENROUTER_VISION_MODEL,
+        text_model=setting.text_model if setting else DEFAULT_OPENROUTER_TEXT_MODEL,
+    )
 
 
 @router.post("/api/profile")
