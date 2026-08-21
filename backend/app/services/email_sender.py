@@ -68,12 +68,24 @@ def _send_gmail_api_email(to_email: str, subject: str, html_content: str) -> boo
         logger.info("Successfully sent email to %s via Gmail API", to_email)
         return True
     except httpx.HTTPStatusError as e:
-        logger.error(
-            "Gmail API failed to send email to %s: status=%s body=%s",
-            to_email,
-            e.response.status_code,
-            e.response.text[:500],
-        )
+        error_body = e.response.text[:500]
+        if "invalid_grant" in error_body:
+            logger.error(
+                "Gmail API OAuth token exchange failed (invalid_grant). "
+                "The GOOGLE_REFRESH_TOKEN may have expired or been revoked. "
+                "If your Google Cloud OAuth consent screen is in 'Testing' mode, refresh tokens expire after 7 days. "
+                "Switch OAuth consent screen status to 'In production' and generate a permanent refresh token. "
+                "Status: %s Body: %s",
+                e.response.status_code,
+                error_body,
+            )
+        else:
+            logger.error(
+                "Gmail API failed to send email to %s: status=%s body=%s",
+                to_email,
+                e.response.status_code,
+                error_body,
+            )
         return False
     except Exception as e:
         logger.error("Gmail API failed to send email to %s: %s", to_email, e)

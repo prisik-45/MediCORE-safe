@@ -92,8 +92,6 @@ services:
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
       REDIS_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
     command:
-      - uv
-      - run
       - celery
       - -A
       - backend.app.tasks

@@ -38,6 +38,24 @@ def get_ocr_engine():
     return _RAPID_OCR_ENGINE
 
 
+def check_ocr_readiness() -> dict[str, Any]:
+    """Lightweight check to verify RapidOCR imports, runtime dependencies, and model readiness."""
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        engine = get_ocr_engine()
+        return {
+            "status": "ready",
+            "engine": "rapidocr_onnxruntime",
+            "initialized": engine is not None,
+        }
+    except Exception as e:
+        logger.error("OCR health check failed: %s", e)
+        return {
+            "status": "unavailable",
+            "error": str(e),
+        }
+
+
 def extract_text_with_ocr(
     image: Image.Image,
     *,

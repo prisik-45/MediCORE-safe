@@ -1,7 +1,10 @@
 import sys
+from pathlib import Path
 import types
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from PIL import Image
 
@@ -38,11 +41,13 @@ class RapidOCRConfigTest(unittest.TestCase):
                     None,
                 )
 
-        fake_module = types.SimpleNamespace(RapidOCR=lambda: FakeRapidOCR())
+        from backend.app.pipeline.extraction import text_ocr
 
-        with patch.dict(sys.modules, {"rapidocr_onnxruntime": fake_module}):
-            if hasattr(ocr.recognize_image, "_rapidocr_engine"):
-                delattr(ocr.recognize_image, "_rapidocr_engine")
+        fake_module = types.SimpleNamespace(RapidOCR=lambda *args, **kwargs: FakeRapidOCR())
+
+        with patch.dict(sys.modules, {"rapidocr_onnxruntime": fake_module}), patch.object(
+            text_ocr, "_RAPID_OCR_ENGINE", FakeRapidOCR()
+        ):
             lines = ocr.recognize_image(Image.new("RGB", (320, 120), "white"), "sample.png")
 
         self.assertEqual([line.text for line in lines], ["Vitamin", "C", "USD", "5/kg"])

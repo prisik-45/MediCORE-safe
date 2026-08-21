@@ -14,12 +14,13 @@ RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies and force opencv-python-headless so cv2 works without GUI/X11
+# Install dependencies and force opencv-contrib-python-headless so cv2 and ximgproc work without GUI/X11
 RUN uv sync --frozen && \
-    uv pip uninstall opencv-python opencv-contrib-python 2>/dev/null || true && \
-    uv pip install --force-reinstall --no-deps opencv-python-headless
+    uv pip uninstall opencv-python opencv-contrib-python opencv-python-headless 2>/dev/null || true && \
+    uv pip install --force-reinstall --no-deps opencv-contrib-python-headless
 
 COPY backend ./backend
+COPY scripts ./scripts
 
 ENV PYTHONPATH=/app
 ENV PATH="/app/.venv/bin:$PATH"

@@ -36,13 +36,13 @@ def make_current_admin():
     }
 
 
-def test_invite_employee_returns_error_and_rolls_back_when_smtp_fails(monkeypatch):
+def test_invite_employee_returns_error_and_rolls_back_when_email_fails(monkeypatch):
     db = MagicMock()
     db.query.side_effect = [
         FakeQuery(None),
         FakeQuery(SimpleNamespace(organisation="CNS Pharma")),
     ]
-    monkeypatch.setattr(admin, "send_smtp_email", lambda *args, **kwargs: False)
+    monkeypatch.setattr(admin, "send_transactional_email", lambda *args, **kwargs: False)
 
     with pytest.raises(HTTPException) as exc:
         admin.invite_employee(make_invite_payload(), db=db, current_user=make_current_admin())
@@ -54,7 +54,7 @@ def test_invite_employee_returns_error_and_rolls_back_when_smtp_fails(monkeypatc
     db.commit.assert_not_called()
 
 
-def test_invite_employee_commits_after_smtp_success(monkeypatch):
+def test_invite_employee_commits_after_email_success(monkeypatch):
     db = MagicMock()
     db.query.side_effect = [
         FakeQuery(None),
@@ -62,7 +62,7 @@ def test_invite_employee_commits_after_smtp_success(monkeypatch):
     ]
     monkeypatch.setattr(admin.secrets, "token_urlsafe", lambda length: "raw-activation-token")
     send_mock = MagicMock(return_value=True)
-    monkeypatch.setattr(admin, "send_smtp_email", send_mock)
+    monkeypatch.setattr(admin, "send_transactional_email", send_mock)
 
     result = admin.invite_employee(make_invite_payload(), db=db, current_user=make_current_admin())
 

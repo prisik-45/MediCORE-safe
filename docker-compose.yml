@@ -71,7 +71,7 @@ services:
     environment:
       VALKEY_URL: ${VALKEY_URL:-redis://:${VALKEY_PASSWORD:-medicore-local-valkey-password}@valkey:6379/0}
       REDIS_URL: ${VALKEY_URL:-redis://:${VALKEY_PASSWORD:-medicore-local-valkey-password}@valkey:6379/0}
-    command: ["uv", "run", "celery", "-A", "backend.app.tasks", "worker", "--loglevel=info"]
+    command: ["celery", "-A", "backend.app.tasks", "worker", "--loglevel=info"]
     depends_on:
       valkey:
         condition: service_healthy

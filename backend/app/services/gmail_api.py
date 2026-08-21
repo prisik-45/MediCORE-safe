@@ -11,7 +11,16 @@ from backend.app.config import get_settings
 class GmailApiClient:
     def __init__(self) -> None:
         settings = get_settings()
-        credentials = Credentials(token=settings.gmail_oauth_token)
+        if settings.google_refresh_token and settings.google_client_id and settings.google_client_secret:
+            credentials = Credentials(
+                token=None,
+                refresh_token=settings.google_refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=settings.google_client_id,
+                client_secret=settings.google_client_secret,
+            )
+        else:
+            credentials = Credentials(token=settings.gmail_oauth_token)
         self.user_id = settings.gmail_user_id
         self.service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
 

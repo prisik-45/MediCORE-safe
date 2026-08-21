@@ -35,6 +35,16 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/health/ocr")
+def health_ocr() -> dict:
+    from backend.app.pipeline.extraction.text_ocr import check_ocr_readiness
+
+    result = check_ocr_readiness()
+    if result.get("status") != "ready":
+        raise HTTPException(status_code=503, detail=result)
+    return result
+
+
 @router.get("/api/profile")
 def get_user_profile(
     db: Session = Depends(get_db),

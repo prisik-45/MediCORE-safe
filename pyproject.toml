@@ -24,7 +24,7 @@ dependencies = [
     "xlrd>=2.0.1", # Owned by pipeline/ingestion/loader_xlsx.py: Legacy Excel (.xls) file loader
     "mammoth>=1.8.0", # Owned by pipeline/ingestion/loader_docx.py: Word (.docx) document loader
     "pillow>=10.0.0", # Owned by pipeline/ingestion/loader_image.py & preprocessing: image manipulation
-    "opencv-python-headless>=4.10.0", # Owned by pipeline/extraction/tables.py & rapidocr: headless image contouring and OCR
+    "opencv-contrib-python-headless>=4.10.0", # Owned by pipeline/extraction/tables.py & rapidocr: headless image contouring and OCR with ximgproc
     "rich>=13.0.0", # Owned by backend/app/services/terminal_sync_status.py: terminal status reporting
     "pydantic[email]", # Owned by backend/app/schemas.py: data validation models
     "email-validator>=2.2.0", # Owned by backend/app/schemas.py: email format validation
