@@ -1,6 +1,6 @@
 import logging
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -9,8 +9,9 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from backend.app.auth import (
     ACCESS_TOKEN_COOKIE,
     REFRESH_TOKEN_COOKIE,
-    SESSION_COOKIE,
+    clear_session_cookies,
     get_current_user,
+    set_session_cookies,
 )
 from backend.app.config import get_settings
 from backend.app.db import get_supabase
@@ -32,80 +33,6 @@ class PasswordChangeRequest(BaseModel):
     @classmethod
     def validate_pwd(cls, value: str) -> str:
         return validate_password_strength(value)
-
-
-def _cookie_secure() -> bool:
-    settings = get_settings()
-    return settings.environment.lower() == "production" or settings.frontend_origin.startswith("https://")
-
-
-def _cookie_samesite() -> str:
-    settings = get_settings()
-    if not _cookie_secure():
-        return "lax"
-    frontend_host = urlparse(settings.frontend_origin).hostname
-    api_host = urlparse(settings.api_base_url).hostname
-    if frontend_host and api_host and frontend_host != api_host:
-        return "none"
-    return "lax"
-
-
-def _set_session_cookies(
-    response: Response,
-    access_token: str,
-    refresh_token: str | None,
-    expires_in: int | None = 3600,
-) -> None:
-    max_age = max(60, int(expires_in or 3600))
-    secure = _cookie_secure()
-    samesite = _cookie_samesite()
-
-    response.set_cookie(
-        ACCESS_TOKEN_COOKIE,
-        access_token,
-        max_age=max_age,
-        httponly=True,
-        secure=secure,
-        samesite=samesite,
-        path="/",
-    )
-
-    # Maintain SESSION_COOKIE for backward compatibility
-    response.set_cookie(
-        SESSION_COOKIE,
-        access_token,
-        max_age=max_age,
-        httponly=True,
-        secure=secure,
-        samesite=samesite,
-        path="/",
-    )
-
-    if refresh_token:
-        # Refresh tokens typically last 30 days
-        refresh_max_age = 30 * 24 * 3600
-        response.set_cookie(
-            REFRESH_TOKEN_COOKIE,
-            refresh_token,
-            max_age=refresh_max_age,
-            httponly=True,
-            secure=secure,
-            samesite=samesite,
-            path="/",
-        )
-
-
-def _clear_session_cookies(response: Response) -> None:
-    secure = _cookie_secure()
-    samesite = _cookie_samesite()
-    for cookie_name in (
-        SESSION_COOKIE,
-        ACCESS_TOKEN_COOKIE,
-        REFRESH_TOKEN_COOKIE,
-        "sb-access-token",
-        "sb-refresh-token",
-    ):
-        response.delete_cookie(cookie_name, path="/", secure=secure, samesite=samesite)
 
 
 def _supabase_password_login(email: str, password: str) -> dict[str, Any]:
@@ -135,7 +62,7 @@ def _supabase_password_login(email: str, password: str) -> dict[str, Any]:
 @router.post("/login")
 def login(payload: LoginRequest, response: Response) -> dict[str, Any]:
     data = _supabase_password_login(payload.email.strip(), payload.password)
-    _set_session_cookies(
+    set_session_cookies(
         response,
         access_token=data["access_token"],
         refresh_token=data.get("refresh_token"),
@@ -177,7 +104,7 @@ def refresh(request: Request, response: Response) -> dict[str, Any]:
         or ""
     )
     if not refresh_token:
-        _clear_session_cookies(response)
+        clear_session_cookies(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token missing or expired.",
@@ -187,12 +114,12 @@ def refresh(request: Request, response: Response) -> dict[str, Any]:
     try:
         res = supabase.auth.refresh_session(refresh_token)
         if not res or not res.session or not res.session.access_token:
-            _clear_session_cookies(response)
+            clear_session_cookies(response)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Failed to refresh session.",
             )
-        _set_session_cookies(
+        set_session_cookies(
             response,
             access_token=res.session.access_token,
             refresh_token=res.session.refresh_token,
@@ -201,7 +128,7 @@ def refresh(request: Request, response: Response) -> dict[str, Any]:
         return {"success": True}
     except Exception as exc:
         logger.warning("Session refresh failed: %s", exc)
-        _clear_session_cookies(response)
+        clear_session_cookies(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session refresh failed.",
@@ -210,7 +137,7 @@ def refresh(request: Request, response: Response) -> dict[str, Any]:
 
 @router.post("/logout")
 def logout(response: Response) -> dict[str, bool]:
-    _clear_session_cookies(response)
+    clear_session_cookies(response)
     return {"success": True}
 
 

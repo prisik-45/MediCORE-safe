@@ -11,8 +11,12 @@ from typing import Generator
 import fitz
 from PIL import Image
 
-Image.MAX_IMAGE_PIXELS = 25_000_000
-MAX_SAFE_PIXELS_PER_PAGE = 25_000_000
+# Accommodates unusually wide catalog pages while retaining a bounded raster size.
+Image.MAX_IMAGE_PIXELS = 30_000_000
+MAX_SAFE_PIXELS_PER_PAGE = 30_000_000
+# PyMuPDF rounds raster dimensions to whole pixels, so leave headroom when
+# converting the continuous PDF page dimensions into a render scale.
+RENDER_SCALE_SAFETY_MARGIN = 0.999
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +42,27 @@ class PDFDocumentWrapper:
                 "PDF page %s render DPI reduced from %s to %.1f to stay under pixel safety limit",
                 page_num_1indexed,
                 target_dpi,
-                max_safe_scale * 72.0,
+                max_safe_scale * RENDER_SCALE_SAFETY_MARGIN * 72.0,
             )
-            scale = max_safe_scale
-        matrix = fitz.Matrix(scale, scale)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
-        if pix.width * pix.height > MAX_SAFE_PIXELS_PER_PAGE:
-            raise ValueError(f"Rendered PDF page {page_num_1indexed} ({pix.width}x{pix.height}) exceeds max pixel limit of {MAX_SAFE_PIXELS_PER_PAGE}")
+            scale = max_safe_scale * RENDER_SCALE_SAFETY_MARGIN
+
+        # The page rectangle can contain fractional points whereas PyMuPDF's
+        # output dimensions are integers. Adaptively retry if rounding still
+        # places the bitmap over the cap.
+        while True:
+            matrix = fitz.Matrix(scale, scale)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            rendered_pixels = pix.width * pix.height
+            if rendered_pixels <= MAX_SAFE_PIXELS_PER_PAGE:
+                break
+
+            adjusted_scale = scale * math.sqrt(MAX_SAFE_PIXELS_PER_PAGE / rendered_pixels)
+            scale = math.nextafter(adjusted_scale * RENDER_SCALE_SAFETY_MARGIN, 0.0)
+            logger.warning(
+                "PDF page %s render scale reduced further to %.1f DPI after pixel rounding",
+                page_num_1indexed,
+                scale * 72.0,
+            )
         return Image.open(io.BytesIO(pix.tobytes("png")))
 
     def close(self) -> None:

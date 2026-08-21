@@ -3,7 +3,7 @@ import hashlib
 import logging
 from urllib.parse import urlparse
 from uuid import UUID
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import Client
 from cryptography.fernet import Fernet
@@ -30,6 +30,57 @@ def data_tenant_id_for_user(user_id: UUID, profile: Profile | None = None) -> UU
 
 def supabase_url_summary() -> str:
     return urlparse(str(settings.supabase_url).strip()).netloc or "<invalid-supabase-url>"
+
+
+def cookie_secure() -> bool:
+    return settings.environment.lower() == "production" or settings.frontend_origin.startswith("https://")
+
+
+def cookie_samesite() -> str:
+    if not cookie_secure():
+        return "lax"
+    frontend_host = urlparse(settings.frontend_origin).hostname
+    api_host = urlparse(settings.api_base_url).hostname
+    return "none" if frontend_host and api_host and frontend_host != api_host else "lax"
+
+
+def set_session_cookies(
+    response: Response,
+    access_token: str,
+    refresh_token: str | None,
+    expires_in: int | None = 3600,
+) -> None:
+    """Store a Supabase session in the application's HttpOnly cookies."""
+    max_age = max(60, int(expires_in or 3600))
+    secure = cookie_secure()
+    samesite = cookie_samesite()
+    for cookie_name in (ACCESS_TOKEN_COOKIE, SESSION_COOKIE):
+        response.set_cookie(
+            cookie_name,
+            access_token,
+            max_age=max_age,
+            httponly=True,
+            secure=secure,
+            samesite=samesite,
+            path="/",
+        )
+    if refresh_token:
+        response.set_cookie(
+            REFRESH_TOKEN_COOKIE,
+            refresh_token,
+            max_age=30 * 24 * 3600,
+            httponly=True,
+            secure=secure,
+            samesite=samesite,
+            path="/",
+        )
+
+
+def clear_session_cookies(response: Response) -> None:
+    secure = cookie_secure()
+    samesite = cookie_samesite()
+    for cookie_name in (SESSION_COOKIE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, "sb-access-token", "sb-refresh-token"):
+        response.delete_cookie(cookie_name, path="/", secure=secure, samesite=samesite)
 
 
 def get_fernet() -> Fernet:
@@ -70,6 +121,7 @@ def decrypt_password(encrypted_password: str) -> str:
 
 def get_current_user(
     request: Request,
+    response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -93,23 +145,35 @@ def get_current_user(
 
     supabase: Client = get_supabase()
     user_response = None
+    token_verification_failed = False
 
     if token:
         try:
             user_response = supabase.auth.get_user(token)
         except Exception:
-            logger.warning("Supabase token verification failed for access token")
+            # An expired access token is normally recoverable with the refresh
+            # token below, so only warn if recovery ultimately fails.
+            token_verification_failed = True
 
     # If access token is invalid/missing but refresh token exists, attempt refresh
     if (not user_response or not getattr(user_response, "user", None)) and refresh_token:
         try:
             refresh_res = supabase.auth.refresh_session(refresh_token)
-            if refresh_res and refresh_res.user:
+            refreshed_session = getattr(refresh_res, "session", None)
+            if refresh_res and refresh_res.user and refreshed_session and refreshed_session.access_token:
                 user_response = refresh_res
+                set_session_cookies(
+                    response,
+                    access_token=refreshed_session.access_token,
+                    refresh_token=refreshed_session.refresh_token,
+                    expires_in=refreshed_session.expires_in,
+                )
         except Exception as e:
             logger.warning("Supabase session refresh failed: %s", e)
 
     if not user_response or not getattr(user_response, "user", None):
+        if token_verification_failed:
+            logger.warning("Supabase token verification failed and session refresh did not recover access")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required.",
