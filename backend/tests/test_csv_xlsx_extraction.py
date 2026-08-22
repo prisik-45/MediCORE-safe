@@ -13,7 +13,6 @@ from backend.app.services.catalog_table_parser import (
     _header_map,
 )
 from backend.app.services.email_ingestion import EmailIngestionService
-from backend.app.schemas import ExtractedCatalogItem
 
 
 class TestCsvXlsxExtraction(unittest.TestCase):

@@ -3,7 +3,7 @@
 Owned by: pipeline/normalization/merge.py
 """
 
-from backend.app.pipeline.normalization.schema import DocumentPageResult, ExtractedBlock, ExtractionResult, SourceType
+from backend.app.pipeline.normalization.schema import DocumentPageResult, ExtractedBlock, SourceType
 
 
 def merge_page_blocks(

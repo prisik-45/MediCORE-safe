@@ -5,8 +5,7 @@ Owned by: pipeline/preprocessing/preprocess.py
 """
 
 from dataclasses import dataclass
-import math
-from typing import List, Tuple
+from typing import List
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 

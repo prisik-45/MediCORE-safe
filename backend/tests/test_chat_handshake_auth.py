@@ -1,5 +1,4 @@
 from uuid import uuid4
-import pytest
 from backend.app.api.chat import (
     _consume_handshake_ticket,
     _store_handshake_ticket,

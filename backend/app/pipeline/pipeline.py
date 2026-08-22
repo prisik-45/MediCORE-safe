@@ -18,7 +18,7 @@ from backend.app.pipeline.ingestion.loader_image import load_image
 from backend.app.pipeline.ingestion.loader_pdf import load_pdf
 from backend.app.pipeline.ingestion.loader_xlsx import format_df_to_markdown, load_xlsx
 from backend.app.pipeline.normalization.merge import create_document_page_result, merge_page_blocks
-from backend.app.pipeline.normalization.schema import DocumentPageResult, ExtractedBlock, ExtractionResult, SourceType
+from backend.app.pipeline.normalization.schema import ExtractedBlock, ExtractionResult
 from backend.app.pipeline.preprocessing.preprocess import normalize_image_resolution
 from backend.app.pipeline.validation.confidence import validate_and_retry_low_confidence_blocks
 from backend.app.services.vision_extraction import extract_image_text_with_openrouter_vision

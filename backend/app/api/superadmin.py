@@ -1,6 +1,6 @@
 import logging
 import redis
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from backend.app.db import get_db, get_supabase

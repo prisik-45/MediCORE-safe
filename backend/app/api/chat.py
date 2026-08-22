@@ -4,7 +4,7 @@ import secrets
 import time
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from redis import Redis
 from sqlalchemy.orm import Session
@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from backend.app.auth import get_current_user
 from backend.app.config import get_settings
 from backend.app.db import get_db
-from backend.app.models import Profile
 from backend.app.services.llm import is_token_limit_error
 from backend.app.services.nl_query import NaturalLanguageQueryEngine
 

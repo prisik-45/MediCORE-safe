@@ -957,6 +957,20 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
   const [inboxItemsErrorId, setInboxItemsErrorId] = useState<string | null>(null);
   const [latestSeenEmailId, setLatestSeenEmailId] = useState<string | null>(null);
   const [visibleGuides, setVisibleGuides] = useState<Record<string, boolean>>({});
+  const [failedEmailDisplayTimes, setFailedEmailDisplayTimes] = useState<Record<string, number>>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("mediCORE_failed_email_display_times");
+        if (stored) {
+          return JSON.parse(stored);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    return {};
+  });
+  const [nowTime, setNowTime] = useState<number>(() => Date.now());
 
   // Settings Redesign States
   const [settingsActiveTab, setSettingsActiveTab] = useState<"profile" | "email">("profile");
@@ -1026,9 +1040,57 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
     }
   }, [syncSettings.pending_approvals, syncSettings.trusted_suppliers]);
 
-  const failedEmailNotifications = useMemo(() => {
-    return catalogEmails.filter((email) => String(email.processing_status || "").startsWith("failed"));
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNowTime(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!catalogEmails.length) return;
+    const failedEmails = catalogEmails.filter((email) =>
+      String(email.processing_status || "").startsWith("failed")
+    );
+    if (!failedEmails.length) return;
+
+    setFailedEmailDisplayTimes((prev) => {
+      let updated = false;
+      const nextMap = { ...prev };
+      const now = Date.now();
+      failedEmails.forEach((email) => {
+        if (!nextMap[email.id]) {
+          nextMap[email.id] = now;
+          updated = true;
+        }
+      });
+      if (updated) {
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("mediCORE_failed_email_display_times", JSON.stringify(nextMap));
+          } catch (e) {
+            // ignore
+          }
+        }
+        return nextMap;
+      }
+      return prev;
+    });
   }, [catalogEmails]);
+
+  const failedEmailNotifications = useMemo(() => {
+    const FAILED_NOTIFICATION_TTL_MS = 2 * 60 * 1000; // 2 minutes (120,000 ms)
+    return catalogEmails.filter((email) => {
+      if (!String(email.processing_status || "").startsWith("failed")) {
+        return false;
+      }
+      const displayedAt = failedEmailDisplayTimes[email.id];
+      if (!displayedAt) {
+        return true;
+      }
+      return nowTime - displayedAt < FAILED_NOTIFICATION_TTL_MS;
+    });
+  }, [catalogEmails, failedEmailDisplayTimes, nowTime]);
 
   const notificationCount = pendingApprovalsList.length + failedEmailNotifications.length;
   const syncActivityVisibleEvents = useMemo(() => {
@@ -2163,18 +2225,6 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
         && trackedAccounts.every((account) => !["pending", "processing", "queued"].includes(
           normalizedProcessingStatus(account.sync_status)
         ));
-
-      if (accountsSettled) {
-        for (const [index, email] of emails.entries()) {
-          const baselineStatus = String(syncEmailBaselineRef.current.get(email.id) || "").split("|", 1)[0];
-          const wasRetryable = ["failed", "error", "partial", "partially_processed"].some(
-            (status) => baselineStatus.startsWith(status)
-          );
-          if (wasRetryable && !eventsById.has(`email-${email.id}`)) {
-            eventsById.set(`email-${email.id}`, syncEventFromEmail(email, observedAt + index));
-          }
-        }
-      }
 
       for (const account of trackedAccounts.filter((item) => normalizedProcessingStatus(item.sync_status) === "error")) {
         eventsById.set(`account-${account.id}`, {

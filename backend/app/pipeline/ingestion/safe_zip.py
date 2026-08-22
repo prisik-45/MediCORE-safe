@@ -3,7 +3,6 @@
 Used for validating and extracting Office OpenXML containers (.docx, .xlsx) safely.
 """
 
-import os
 import zipfile
 from pathlib import Path
 from typing import BinaryIO

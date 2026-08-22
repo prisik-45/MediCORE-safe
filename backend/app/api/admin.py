@@ -2,14 +2,14 @@ import secrets
 import logging
 import hashlib
 from datetime import datetime, timedelta, UTC
-from uuid import UUID, uuid4
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import exists, func, text
 from pydantic import BaseModel, EmailStr, field_validator
 
 from backend.app.db import get_db, get_supabase, SessionLocal
-from backend.app.auth import get_current_admin, get_current_user
+from backend.app.auth import get_current_admin
 from backend.app.models import Profile, Supplier, CatalogItem, CatalogEmail, EmployeeInvitation, PasswordReset, EmailAccount, AIQueryLog, TenantAISetting
 from backend.app.services.email_sender import send_transactional_email
 from backend.app.config import get_settings
@@ -463,7 +463,6 @@ def list_employees(db: Session = Depends(get_db), current_user: dict = Depends(g
 
     # Fallback lookup from EmployeeInvitation for any missing email
     invitations_by_tenant = db.query(EmployeeInvitation).filter(EmployeeInvitation.tenant_id == tenant_uuid).all()
-    inv_emails = {inv.email: inv for inv in invitations_by_tenant}
     
     invitations = [inv for inv in invitations_by_tenant if inv.status == "Pending Activation"]
     
@@ -616,7 +615,7 @@ def delete_employee(
     # Run the cascading deletes and invitation clean-ups in background
     background_tasks.add_task(async_delete_employee_cleanup, user_id)
     
-    return {"message": f"Employee has been permanently deleted."}
+    return {"message": "Employee has been permanently deleted."}
 
 # 7. Reset Password Trigger
 @router.post("/employees/{user_id}/reset-password")

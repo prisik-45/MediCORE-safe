@@ -4,10 +4,10 @@ from difflib import SequenceMatcher
 from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import and_, func, nullslast, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from backend.app.config import get_settings
 from backend.app.db import ensure_supabase_storage_bucket, get_db, get_supabase
@@ -509,7 +509,7 @@ def delete_catalog_email(
         background_tasks.add_task(delete_storage_object, object_path)
         for certificate_path in dict.fromkeys(certificate_paths):
             background_tasks.add_task(delete_storage_object, certificate_path)
-    except Exception as e:
+    except Exception:
         db.rollback()
         raise HTTPException(
             status_code=500,
@@ -652,9 +652,21 @@ async def upload_certificate(
         "country": detected_country,
         "certificate_pdfs": [cert_obj],
     }
+    certificate_email = CatalogEmail(
+        id=uuid4(),
+        tenant_id=active_tenant_id,
+        supplier_id=supplier.id,
+        raw_email_id=f"manual-certificate:{supplier.id}:{uuid4()}",
+        subject=f"Manual certificate upload: {file_name}",
+        pdf_url=public_url,
+        body_preview=target_ingredient,
+        processing_status="certificate",
+    )
+    db.add(certificate_email)
     new_item = CatalogItem(
         id=uuid4(),
         tenant_id=active_tenant_id,
+        catalog_email_id=certificate_email.id,
         supplier_id=supplier.id,
         ingredient_name=target_ingredient,
         price_per_unit=None,

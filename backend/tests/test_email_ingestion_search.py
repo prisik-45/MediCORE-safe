@@ -7,7 +7,7 @@ from backend.app.models import CatalogItem
 from backend.app.schemas import ExtractedCatalogItem
 from backend.app.services.catalog_table_parser import parse_catalog_table_text
 from backend.app.services.country_detection import detect_supplier_country
-from backend.app.services.document_classifier import CATALOGUE, CERTIFICATE, OTHER, classify_document
+from backend.app.services.document_classifier import CATALOGUE, CERTIFICATE, OTHER, REVIEW, classify_document
 from backend.app.services.email_ingestion import (
     EmailIngestionService,
     filter_trusted_pending_approvals,
@@ -70,12 +70,26 @@ class EmailIngestionSearchCriteriaTest(unittest.TestCase):
         self.assertNotIn("UNSEEN", args)
         self.assertIn("UNDELETED", args)
 
-    def test_email_retry_status_rules_skip_success_but_retry_failed_and_partial(self) -> None:
+    def test_email_status_rules_skip_every_already_logged_email(self) -> None:
         self.assertTrue(self.service._should_skip_logged_email("completed"))
         self.assertTrue(self.service._should_skip_logged_email("skipped: newsletter or promotional email"))
         self.assertTrue(self.service._should_skip_logged_email("deleted"))
-        self.assertFalse(self.service._should_skip_logged_email("failed: OCR error"))
-        self.assertFalse(self.service._should_skip_logged_email("partial"))
+        self.assertTrue(self.service._should_skip_logged_email("failed: OCR error"))
+        self.assertTrue(self.service._should_skip_logged_email("partial"))
+        self.assertTrue(self.service._should_skip_logged_email("partially_processed"))
+        self.assertFalse(self.service._should_skip_logged_email(None))
+        self.assertFalse(self.service._should_skip_logged_email(""))
+
+    def test_process_message_skips_any_existing_email_record(self) -> None:
+        message = EmailMessage()
+        message["From"] = "Supplier <supplier@example.com>"
+        message["Subject"] = "Catalogue"
+        service = object.__new__(EmailIngestionService)
+        service._existing_email_status = lambda raw_email_id, tenant_id=None: "failed: OCR error"
+
+        processed = service._process_message(message, raw_email_id="account:INBOX:123")
+
+        self.assertEqual(processed, 0)
 
     def test_supplier_catalogue_intent_accepts_image_attachments(self) -> None:
         attachments = [{"filename": "supplier-catalogue.jpeg", "ext": ".jpeg"}]
@@ -1105,6 +1119,7 @@ class EmailIngestionSearchCriteriaTest(unittest.TestCase):
         self.assertEqual(certificate.category, CERTIFICATE)
         self.assertEqual(certificate.material_hint, "Vitamin C USP 99%")
         self.assertEqual(other.category, OTHER)
+        self.assertNotEqual(other.confidence, 0.5)
 
     def test_document_classifier_treats_product_specification_brochure_page_as_catalogue(self) -> None:
         document = classify_document(
@@ -1127,6 +1142,62 @@ class EmailIngestionSearchCriteriaTest(unittest.TestCase):
         )
 
         self.assertEqual(document.category, CATALOGUE)
+
+    def test_document_classifier_treats_rm_volume_docx_table_as_catalogue(self) -> None:
+        document = classify_document(
+            "requirements.docx",
+            ".docx",
+            "| RM | Volume (KG) |\n"
+            "| --- | --- |\n"
+            "| Thiamine Mononitrate | 25.2000 |\n"
+            "| Riboflavin | 25.20 |\n"
+            "| Niacinamide | 7.56 |\n"
+            "| Methylcobalamin | 0.13 |",
+        )
+
+        self.assertEqual(document.category, CATALOGUE)
+
+    def test_document_classifier_treats_price_offer_pdf_table_as_catalogue_without_catalogue_word(self) -> None:
+        document = classify_document(
+            "sample.pdf",
+            ".pdf",
+            "| Ingredient | Specification | Price/Unit | Qty Avail. | Lead Time |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| Vitamin C | USP 99% | USD 5/kg | 500 KG | in stock |\n"
+            "| Zinc Gluconate | 98% | USD 8/kg | 100 KG | 2 weeks |",
+        )
+
+        self.assertEqual(document.category, CATALOGUE)
+
+    def test_document_classifier_keeps_coa_with_product_fields_as_certificate(self) -> None:
+        document = classify_document(
+            "sample.pdf",
+            ".pdf",
+            "Product Name: Zinc Gluconate\n"
+            "Batch No: ZG-2026-17\n"
+            "Assay: 99.4%\n"
+            "Appearance: White powder\n"
+            "Loss on Drying: 0.3%\n"
+            "Conforms",
+            context_text="Attached certificate of analysis",
+        )
+
+        self.assertEqual(document.category, CERTIFICATE)
+
+    def test_document_classifier_marks_poor_extraction_as_review(self) -> None:
+        document = classify_document("scan.pdf", ".pdf", "")
+
+        self.assertEqual(document.category, REVIEW)
+        self.assertLess(document.confidence, 0.6)
+
+    def test_document_classifier_marks_ambiguous_document_as_review(self) -> None:
+        document = classify_document(
+            "sample.pdf",
+            ".pdf",
+            "Product Name: Zinc Gluconate\nBatch No: ZG-17\nPrice: USD 8/kg",
+        )
+
+        self.assertEqual(document.category, REVIEW)
 
     def test_document_classifier_treats_body_price_update_as_catalogue(self) -> None:
         result = classify_document(

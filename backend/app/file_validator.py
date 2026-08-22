@@ -4,10 +4,8 @@ Ensures strict alignment between file magic bytes, declared MIME type, and file 
 """
 
 import io
-import os
 import re
 from pathlib import Path
-from typing import BinaryIO
 
 # Maximum upload size for certificates (15 MB)
 MAX_CERTIFICATE_UPLOAD_BYTES = 15 * 1024 * 1024

@@ -7,7 +7,6 @@ import io
 import logging
 import math
 from pathlib import Path
-from typing import Generator
 import fitz
 from PIL import Image
 

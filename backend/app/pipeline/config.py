@@ -1,7 +1,7 @@
 """Configuration for document extraction pipeline engines and parameters."""
 
 from dataclasses import dataclass, field
-from typing import Dict, Literal
+from typing import Dict
 
 
 @dataclass

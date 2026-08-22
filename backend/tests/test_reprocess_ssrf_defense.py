@@ -1,6 +1,4 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
-import pytest
 
 from backend.app.services.email_ingestion import EmailIngestionService
 

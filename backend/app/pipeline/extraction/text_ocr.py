@@ -41,7 +41,6 @@ def get_ocr_engine():
 def check_ocr_readiness() -> dict[str, Any]:
     """Lightweight check to verify RapidOCR imports, runtime dependencies, and model readiness."""
     try:
-        from rapidocr_onnxruntime import RapidOCR
         engine = get_ocr_engine()
         return {
             "status": "ready",

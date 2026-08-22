@@ -1,0 +1,91 @@
+name: MediCORE CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend Tests And Static Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Check runtime names
+        run: uv run ruff check backend --select F
+
+      - name: Compile backend
+        run: uv run python -m compileall backend/app
+
+      - name: Run backend tests
+        run: uv run pytest -q backend/tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+  frontend:
+    name: Frontend Typecheck And Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: ./node_modules/.bin/tsc --noEmit
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+          NEXT_PUBLIC_WS_URL: ws://127.0.0.1:8000/ws/chat
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: test-anon-key
+          NEXT_PUBLIC_SUPERADMIN_EMAIL: superadmin@example.com
+
+  schema:
+    name: Schema Repair Guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify schema repair SQL is present
+        run: |
+          test -f supabase/production_schema_repair.sql
+          grep -qi "add column if not exists moq" supabase/production_schema_repair.sql
+          grep -qi "add column if not exists lead_time_days" supabase/production_schema_repair.sql
+          grep -qi "add column if not exists moq" supabase/migrations/009_catalog_item_decimal_precision.sql
+          grep -qi "add column if not exists lead_time_days" supabase/migrations/009_catalog_item_decimal_precision.sql
+
+  docker:
+    name: Docker Builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f backend/Dockerfile -t medicore-backend-ci .
+
+      - name: Build frontend image
+        run: docker build -f frontend/Dockerfile -t medicore-frontend-ci .

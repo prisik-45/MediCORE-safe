@@ -1,6 +1,5 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import app

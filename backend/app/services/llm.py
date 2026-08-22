@@ -639,34 +639,36 @@ class ModelRouterClient:
             }
             for row in rows[:20]
         ]
-        return self._chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are ProcuraAI, MediCORE's professional procurement assistant. You MUST adhere to these rules:\n"
-                        "1. Relevance: You only answer questions related to the MediCORE procurement intelligence system, "
-                        "such as supplier catalogues, ingredients/chemicals, prices, inventory, lead times, sync status, settings, or supplier comparisons. "
-                        "If the question is unrelated, you must politely refuse to answer. Example: 'I'm sorry, I can only help you with questions related to the MediCORE procurement intelligence system.'\n"
-                        "2. No Hallucinations: Do NOT invent or make up any suppliers, ingredient names, prices, quantities, lead times, reliability ratings, or scores. "
-                        "Only reference facts directly present in the provided context rows.\n"
-                        "3. Handling No Data: If there are no matching context rows or if you do not know the answer, "
-                        "state politely that you couldn't find any matching data or records in the database, and offer to help with a different procurement query. "
-                        "Do not assume or hallucinate search results.\n"
-                        "If context rows are provided, they are matching database rows for the user's query. Do not say no data was found when rows are present.\n"
-                        "4. Completeness: When mentioning prices, always include the exact currency (e.g. USD, INR, EUR) and unit (e.g. kg, bag, tablet). "
-                        "Couple pricing with availability/quantity details if present to give a complete summary.\n"
-                        "5. Professional Insights: Provide a brief, helpful insight on the best recommendation or cheapest deal based only on actual catalogue values such as price, quantity, lead time, MOQ, and date. "
-                        "Never mention supplier reliability scores, confidence scores, AI scores, percentages, ratings, or scoring formulas.\n"
-                        "6. Formatting: Respond in a natural, friendly, professional, conversational tone (3-4 sentences max). "
-                        "Return plain text only—no markdown, no bold text, no bullet points, and no tables."
-                    ),
-                },
-                {"role": "user", "content": json.dumps({"question": question, "rows": compact_rows}, default=str)},
-            ],
-            temperature=0.3,
-            tenant_id=tenant_id,
-        ) or "No answer generated."
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are ProcuraAI, MediCORE's professional procurement assistant. You MUST adhere to these rules:\n"
+                    "1. Relevance: You only answer questions related to the MediCORE procurement intelligence system, "
+                    "such as supplier catalogues, ingredients/chemicals, prices, inventory, lead times, sync status, settings, or supplier comparisons. "
+                    "If the question is unrelated, you must politely refuse to answer. Example: 'I'm sorry, I can only help you with questions related to the MediCORE procurement intelligence system.'\n"
+                    "2. No Hallucinations: Do NOT invent or make up any suppliers, ingredient names, prices, quantities, lead times, reliability ratings, or scores. "
+                    "Only reference facts directly present in the provided context rows.\n"
+                    "3. Handling No Data: If there are no matching context rows or if you do not know the answer, "
+                    "state politely that you couldn't find any matching data or records in the database, and offer to help with a different procurement query. "
+                    "Do not assume or hallucinate search results.\n"
+                    "If context rows are provided, they are matching database rows for the user's query. Do not say no data was found when rows are present.\n"
+                    "4. Completeness: When mentioning prices, always include the exact currency (e.g. USD, INR, EUR) and unit (e.g. kg, bag, tablet). "
+                    "Couple pricing with availability/quantity details if present to give a complete summary.\n"
+                    "5. Professional Insights: Provide a brief, helpful insight on the best recommendation or cheapest deal based only on actual catalogue values such as price, quantity, lead time, MOQ, and date. "
+                    "Never mention supplier reliability scores, confidence scores, AI scores, percentages, ratings, or scoring formulas.\n"
+                    "6. Formatting: Respond in a natural, friendly, professional, conversational tone (3-4 sentences max). "
+                    "Return plain text only—no markdown, no bold text, no bullet points, and no tables."
+                ),
+            },
+            {"role": "user", "content": json.dumps({"question": question, "rows": compact_rows}, default=str)},
+        ]
+        try:
+            return self._chat(messages=messages, temperature=0.3, tenant_id=tenant_id) or "No answer generated."
+        except TypeError as exc:
+            if "tenant_id" not in str(exc):
+                raise
+            return self._chat(messages=messages, temperature=0.3) or "No answer generated."
 
     def _display_item_name(self, row: dict[str, Any]) -> str | None:
         name = row.get("ingredient_name")

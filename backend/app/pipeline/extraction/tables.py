@@ -5,7 +5,6 @@ Owned by: pipeline/extraction/tables.py
 
 import io
 import logging
-from typing import Any
 import fitz
 from PIL import Image
 

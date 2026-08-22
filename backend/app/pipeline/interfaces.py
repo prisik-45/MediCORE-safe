@@ -2,9 +2,8 @@
 
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
-from PIL import Image
 
-from backend.app.pipeline.normalization.schema import DocumentPageResult, ExtractedBlock, SourceType
+from backend.app.pipeline.normalization.schema import ExtractedBlock
 
 
 @runtime_checkable

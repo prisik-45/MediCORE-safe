@@ -10,7 +10,6 @@ import re
 import tempfile
 import zipfile
 
-import httpx
 from urllib.parse import unquote, urlparse
 from datetime import UTC, datetime
 from email.message import Message
@@ -27,20 +26,21 @@ from backend.app.models import CatalogEmail, CatalogItem, Supplier
 from backend.app.services.catalog_table_parser import (
     CATALOG_TABLE_PARSER_VERSION,
     _catalogue_header_has_required_shape,
+    _header_cell_metadata,
     _header_map,
     extract_pack_size,
     is_valid_ingredient_name,
     parse_catalog_table_text,
 )
 from backend.app.services.country_detection import UNKNOWN_COUNTRY, detect_supplier_country
-from backend.app.services.document_classifier import CATALOGUE, CERTIFICATE, OTHER, DocumentClassification, classify_document
+from backend.app.services.document_classifier import CATALOGUE, CERTIFICATE, DocumentClassification, classify_document
 from backend.app.services.gmail_api import GmailApiClient
 from backend.app.services.llm import OpenRouterClient
 from backend.app.services.normalizer import normalize_item
 from backend.app.services.pdf_extract import extract_pdf_text
 from backend.app.schemas import ExtractedCatalogItem, clean_optional_text
 from backend.app.security import validate_public_network_host
-from backend.app.services.sanitizer import sanitize_preview_text, wrap_llm_untrusted_content
+from backend.app.services.sanitizer import sanitize_preview_text
 from backend.app.file_validator import (
     MAX_DATA_URI_BYTES,
     MAX_DATA_URI_COUNT,
@@ -54,7 +54,6 @@ from backend.app.file_validator import (
 logger = logging.getLogger(__name__)
 
 MAX_ATTACHMENT_COUNT = 10
-RETRYABLE_EMAIL_STATUSES = ("failed", "error", "partial", "partially_processed")
 IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 CLASSIFIABLE_DOCUMENT_EXTENSIONS = {".pdf", ".docx"}
 
@@ -348,7 +347,7 @@ class EmailIngestionService:
         tenant_id: Any | None = None,
     ) -> int:
         existing_status = self._existing_email_status(raw_email_id, tenant_id=tenant_id)
-        if existing_status and not self._is_retryable_email_status(existing_status):
+        if existing_status:
             logger.info("Skipping already-logged email id=%s status=%s", raw_email_id, existing_status)
             return 0
 
@@ -503,7 +502,7 @@ class EmailIngestionService:
                             logger.info("Stored certificate document %s for email id=%s", target_name, raw_email_id)
                             continue
 
-                        if classification.category == OTHER:
+                        if classification.category != CATALOGUE:
                             uploaded_object_paths.append(object_path)
                             logger.info("Skipping non-catalogue document %s after classification", target_name)
                             continue
@@ -790,13 +789,22 @@ class EmailIngestionService:
             return parsed
 
         try:
-            llm_items = [
-                normalize_item(item)
-                for item in self.llm.extract_catalog_items(
+            try:
+                raw_llm_items = self.llm.extract_catalog_items(
                     text,
                     reference_date=reference_date,
                     tenant_id=tenant_id,
                 )
+            except TypeError as exc:
+                if "tenant_id" not in str(exc):
+                    raise
+                raw_llm_items = self.llm.extract_catalog_items(
+                    text,
+                    reference_date=reference_date,
+                )
+            llm_items = [
+                normalize_item(item)
+                for item in raw_llm_items
             ]
             extracted = self._dedupe_extracted_items([*parsed, *llm_items])
             logger.info("LLM fallback extracted %s catalogue row(s) from %s", len(extracted), source_name)
@@ -1806,14 +1814,9 @@ class EmailIngestionService:
     def _status_key(self, status: str | None) -> str:
         return str(status or "").strip().lower()
 
-    def _is_retryable_email_status(self, status: str | None) -> bool:
-        return self._status_key(status).startswith(RETRYABLE_EMAIL_STATUSES)
-
     def _should_skip_logged_email(self, status: str | None) -> bool:
         key = self._status_key(status)
-        if not key:
-            return False
-        return not self._is_retryable_email_status(key)
+        return bool(key)
 
     def _raw_email_base_id(self, raw_email_id: str, account_id: Any) -> str:
         account_prefix = f"{account_id}:"
@@ -2242,48 +2245,6 @@ class EmailIngestionService:
         except Exception:
             logger.debug("Pipeline embedded extraction failed for %s", file_path.name, exc_info=True)
             return ""
-
-        image_assets = [
-            asset
-            for asset in getattr(document, "assets", []) or []
-            if str(getattr(asset, "media_type", "") or "").lower().startswith("image/")
-            and getattr(asset, "data", None)
-        ]
-        if not image_assets:
-            return ""
-
-        texts: list[str] = []
-        suffix_by_type = {
-            "image/png": ".png",
-            "image/jpeg": ".jpg",
-            "image/jpg": ".jpg",
-            "image/webp": ".webp",
-            "image/bmp": ".bmp",
-            "image/tiff": ".tiff",
-        }
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            for index, asset in enumerate(image_assets, start=1):
-                media_type = str(getattr(asset, "media_type", "") or "").lower()
-                origin_part = str(getattr(asset, "origin_part", "") or "")
-                suffix = Path(origin_part).suffix.lower() or suffix_by_type.get(media_type, ".png")
-                image_path = tmp_path / f"office-image-{index}{suffix}"
-                try:
-                    image_path.write_bytes(bytes(getattr(asset, "data")))
-                    image_text = self._extract_image_text(image_path)
-                except Exception:
-                    logger.debug(
-                        "OCR failed for embedded office image %s in %s",
-                        origin_part or index,
-                        file_path.name,
-                        exc_info=True,
-                    )
-                    continue
-                if image_text.strip():
-                    texts.append(f"[OFFICE EMBEDDED IMAGE OCR] {origin_part or image_path.name}\n{image_text.strip()}")
-        if texts:
-            logger.info("OCR extracted embedded image text from %s image(s) in %s", len(texts), file_path.name)
-        return "\n\n".join(dict.fromkeys(texts))
 
     def _extract_docx_zip_embedded_image_text(self, file_path: Path) -> str:
         image_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
@@ -2809,7 +2770,6 @@ class EmailIngestionService:
         if ext != ".pdf":
             return existing_text
 
-        from backend.app.services.pdf_extract import extract_pdf_text
 
         catalogue_text = extract_pdf_text(file_path, use_vision_for_images=True, db=self.db, tenant_id=tenant_id)
         return catalogue_text or existing_text
@@ -3476,7 +3436,6 @@ class EmailIngestionService:
                             if not is_trusted and not supplier_exists:
                                 if parse_targets:
                                     # New supplier alert! Add to pending_approvals and DO NOT mark read
-                                    import json
                                     try:
                                         pending_list = json.loads(sync_setting.pending_approvals or "[]")
                                     except Exception:

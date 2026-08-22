@@ -3,7 +3,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.config import get_settings
 from backend.app.db import get_db
 from backend.app.auth import get_current_user
 from backend.app.models import TenantAISetting

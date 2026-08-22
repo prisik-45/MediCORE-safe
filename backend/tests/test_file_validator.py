@@ -1,8 +1,4 @@
-import pytest
 from backend.app.file_validator import (
-    CERTIFICATE_ALLOWED_EXTENSIONS,
-    MAX_CERTIFICATE_UPLOAD_BYTES,
-    MAX_DOCUMENT_BYTES,
     sanitize_filename,
     sniff_magic_type,
     validate_document_bytes,

@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from backend.app.auth import (
-    ACCESS_TOKEN_COOKIE,
     REFRESH_TOKEN_COOKIE,
     clear_session_cookies,
     get_current_user,

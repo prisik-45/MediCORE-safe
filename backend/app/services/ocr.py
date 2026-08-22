@@ -5,7 +5,7 @@ Owned by: backend/app/services/ocr.py
 
 import logging
 from dataclasses import dataclass
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image
 
 from backend.app.pipeline.extraction.text_ocr import extract_text_with_ocr
 from backend.app.pipeline.preprocessing.preprocess import preprocess_for_ocr

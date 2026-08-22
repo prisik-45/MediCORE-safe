@@ -1,12 +1,9 @@
 import unittest
-from types import SimpleNamespace
 from uuid import uuid4
 
 from backend.app.services.sql_executor import validate_readonly_sql, execute_readonly_sql
 from backend.app.mcp.tools import (
-    execute_readonly_sql_tool,
-    get_structured_query_results_tool,
-    perform_catalog_update_tool
+    get_structured_query_results_tool
 )
 
 
@@ -109,7 +106,6 @@ class SQLExecutorMCPTest(unittest.TestCase):
 
     def test_mcp_get_structured_query_results_tool(self) -> None:
         tenant_id = uuid4()
-        fake_rows = [{"ingredient_name": "Citric Acid", "price_per_unit": 12.5}]
         
         class FakeResult:
             returns_rows = True

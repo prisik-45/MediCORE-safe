@@ -4,7 +4,6 @@ import pytest
 
 from backend.app.pipeline.ingestion.safe_zip import (
     SafeZipBombError,
-    SafeZipFile,
     SafeZipTraversalError,
     inspect_and_validate_zip,
 )

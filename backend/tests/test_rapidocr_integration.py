@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 
-import numpy as np
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
@@ -13,7 +12,7 @@ from backend.app.pipeline.extraction.text_ocr import (
     extract_text_with_ocr,
     get_ocr_engine,
 )
-from backend.app.services.ocr import recognize_image, recognize_image_to_text
+from backend.app.services.ocr import recognize_image
 
 
 def create_sample_text_image(text: str = "MEDICORE PHARMA") -> Image.Image:
