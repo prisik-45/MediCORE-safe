@@ -63,12 +63,12 @@ export const supabase = {
       await backendFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
       return { data: {}, error: null };
     },
-    async updateUser(payload: { data?: { full_name?: string }; password?: string }): AuthResponse<any> {
+    async updateUser(payload: { data?: { full_name?: string }; password?: string; current_password?: string }): AuthResponse<any> {
       if (payload.password) {
         const response = await backendFetch("/api/auth/change-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: payload.password }),
+          body: JSON.stringify({ current_password: payload.current_password, password: payload.password }),
         });
         if (!response.ok) {
           const detail = await response.json().catch(() => ({}));

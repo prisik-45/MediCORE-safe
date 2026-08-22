@@ -141,8 +141,13 @@ def reprocess_empty(
     force: bool = Query(False),
     current_user: dict = Depends(get_current_admin),
 ) -> dict:
+    from uuid import UUID
+
     try:
-        processed = EmailIngestionService(db).reprocess_empty_catalog_emails(force=force)
+        processed = EmailIngestionService(db).reprocess_empty_catalog_emails(
+            force=force,
+            tenant_id=UUID(current_user["tenant_id"]),
+        )
         return {"processed": processed, "error": None}
     except Exception:
         db.rollback()

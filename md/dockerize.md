@@ -607,7 +607,6 @@ docker compose exec api sh
 Run a backend script:
 
 ```powershell
-docker compose exec api uv run python -m backend.app.seed_mock_catalogs
 ```
 
 Check Valkey:

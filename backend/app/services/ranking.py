@@ -23,10 +23,8 @@ class SupplierRanker:
     ) -> list[dict]:
         from uuid import UUID
         from backend.app.models import CatalogEmail
-        from backend.app.config import get_settings
         from sqlalchemy import or_
-        
-        settings = get_settings()
+
         latest_items = (
             select(
                 CatalogItem.id.label("item_id"),
@@ -70,13 +68,6 @@ class SupplierRanker:
             .limit(result_limit)
         )
         stmt = stmt.where(CatalogEmail.processing_status.in_(["completed", "partial"]))
-        if not settings.mock_data_enabled:
-            stmt = stmt.where(
-                or_(
-                    CatalogEmail.raw_email_id.is_(None),
-                    CatalogEmail.raw_email_id.not_like("core-mock-catalog-%")
-                )
-            )
         if tenant_id:
             stmt = stmt.where(CatalogItem.tenant_id == (UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id))
         if matched_ingredient_names:

@@ -635,30 +635,37 @@ class EmailIngestionService:
             logger.warning("Failed downloading validated Supabase object %s: %s", object_path, err)
             return None
 
-    def reprocess_empty_catalog_emails(self, limit: int = 25, force: bool = False) -> int:
+    def reprocess_empty_catalog_emails(
+        self,
+        limit: int = 25,
+        force: bool = False,
+        tenant_id: Any | None = None,
+    ) -> int:
+        tenant_uuid = UUID(str(tenant_id)) if tenant_id is not None else None
         if force:
-            empty_emails = (
-                self.db.query(CatalogEmail)
-                .filter(CatalogEmail.pdf_url.isnot(None))
-                .order_by(CatalogEmail.received_at.desc())
-                .limit(limit)
-                .all()
-            )
+            query = self.db.query(CatalogEmail).filter(CatalogEmail.pdf_url.isnot(None))
         else:
-            empty_emails = (
+            query = (
                 self.db.query(CatalogEmail)
                 .outerjoin(CatalogItem, CatalogItem.catalog_email_id == CatalogEmail.id)
                 .filter(CatalogItem.id.is_(None), CatalogEmail.pdf_url.isnot(None))
-                .order_by(CatalogEmail.received_at.desc())
-                .limit(limit)
-                .all()
             )
+        if tenant_uuid is not None:
+            query = query.filter(CatalogEmail.tenant_id == tenant_uuid)
+        empty_emails = query.order_by(CatalogEmail.received_at.desc()).limit(limit).all()
 
         processed = 0
         for catalog_email in empty_emails:
             if not catalog_email.pdf_url:
                 continue
-            supplier = self.db.query(Supplier).filter(Supplier.id == catalog_email.supplier_id).first()
+            supplier = (
+                self.db.query(Supplier)
+                .filter(
+                    Supplier.id == catalog_email.supplier_id,
+                    Supplier.tenant_id == catalog_email.tenant_id,
+                )
+                .first()
+            )
             if not supplier:
                 continue
             logger.info("Reprocessing stored attachment for email id=%s", catalog_email.raw_email_id)
@@ -681,7 +688,8 @@ class EmailIngestionService:
                 catalog_email.duplicate_count = 0
                 if force:
                     self.db.query(CatalogItem).filter(
-                        CatalogItem.catalog_email_id == catalog_email.id
+                        CatalogItem.catalog_email_id == catalog_email.id,
+                        CatalogItem.tenant_id == catalog_email.tenant_id,
                     ).delete(synchronize_session=False)
 
                 if ext in IMAGE_ATTACHMENT_EXTENSIONS:
@@ -734,8 +742,13 @@ class EmailIngestionService:
         logger.info("Reprocessed %s catalogue item(s) from stored attachments", processed)
         return processed
 
-    def reprocess_stored_attachments(self, limit: int = 25, force: bool = False) -> int:
-        return self.reprocess_empty_catalog_emails(limit=limit, force=force)
+    def reprocess_stored_attachments(
+        self,
+        limit: int = 25,
+        force: bool = False,
+        tenant_id: Any | None = None,
+    ) -> int:
+        return self.reprocess_empty_catalog_emails(limit=limit, force=force, tenant_id=tenant_id)
 
     def _extract_items_from_text(
         self,

@@ -14,8 +14,7 @@ class Settings(BaseSettings):
     app_name: str = "MediCORE"
     api_base_url: str = "http://localhost:8000"
     frontend_origin: str = "http://localhost:3000"
-    mock_data_enabled: bool = False
-
+    trusted_proxy_hosts: str = ""
     supabase_url: AnyHttpUrl = "https://example.supabase.co"
     supabase_service_role_key: str = Field(default="replace-me", repr=False)
     supabase_storage_bucket: str = "catalog-pdfs"

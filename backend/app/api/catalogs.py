@@ -4,15 +4,13 @@ from difflib import SequenceMatcher
 from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import and_, func, or_, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 from uuid import UUID, uuid4
 
 from backend.app.config import get_settings
 from backend.app.db import ensure_supabase_storage_bucket, get_db, get_supabase
 from backend.app.models import CatalogEmail, CatalogItem, EmailAccount, EmailSyncSetting, Supplier
-from backend.app.seed_mock_catalogs import build_catalogs
 from backend.app.auth import get_current_user
 from backend.app.file_validator import (
     CERTIFICATE_ALLOWED_EXTENSIONS,
@@ -130,72 +128,12 @@ def certificate_storage_paths(raw_payload: dict | None) -> list[str]:
     ]
 
 
-def mock_catalog_emails(limit: int) -> list[dict]:
-    suppliers, emails, _ = build_catalogs()
-    supplier_names = {supplier.id: supplier.name for supplier in suppliers}
-    return [
-        {
-            "id": str(email.id),
-            "supplier_name": supplier_names.get(email.supplier_id, "Mock supplier"),
-            "email_domain": "",
-            "received_at": email.received_at,
-            "subject": email.subject,
-            "pdf_url": email.pdf_url,
-            "processing_status": email.processing_status,
-            "item_count": 0,
-            "duplicate_count": 0,
-        }
-        for email in sorted(emails, key=lambda row: row.received_at, reverse=True)[:limit]
-    ]
-
-
-def mock_catalog_items(q: str | None, limit: int) -> list[dict]:
-    suppliers, emails, items = build_catalogs()
-    supplier_names = {supplier.id: supplier.name for supplier in suppliers}
-    supplier_countries = {supplier.id: supplier.country for supplier in suppliers}
-    email_received_dates = {email.id: email.received_at for email in emails}
-    filtered_items = [item for item in items if not q or q.lower() in item.ingredient_name.lower()]
-    return [
-        {
-            "id": str(item.id),
-            "catalog_email_id": str(item.catalog_email_id) if getattr(item, "catalog_email_id", None) else None,
-            "supplier_name": supplier_names.get(item.supplier_id, "Mock supplier"),
-            "email_domain": "",
-            "country": (
-                supplier_countries.get(item.supplier_id, "Unknown")
-                if supplier_countries.get(item.supplier_id) and supplier_countries.get(item.supplier_id) != "Unknown"
-                else (display_value(item.raw_payload, "country_of_origin") or display_value(item.raw_payload, "country") or "Unknown")
-            ),
-            "ingredient_name": item.ingredient_name,
-            "specification": display_value(item.raw_payload, "specification"),
-            "price_per_unit": nullable_float(item.price_per_unit),
-            "currency": item.currency,
-            "available_qty": nullable_float(item.available_qty),
-            "unit": item.unit,
-            "valid_until": item.valid_until,
-            "lead_time_days": getattr(item, "lead_time_days", None) if getattr(item, "lead_time_days", None) is not None else (item.raw_payload or {}).get("lead_time_days"),
-            "lead_time_text": display_value(item.raw_payload, "lead_time_text"),
-            "moq": getattr(item, "moq", None) if getattr(item, "moq", None) is not None else (item.raw_payload or {}).get("moq"),
-            "pack_size": display_value(item.raw_payload, "pack_size"),
-            "price_display": display_value(item.raw_payload, "price_display"),
-            "quantity_display": display_value(item.raw_payload, "quantity_display"),
-            "moq_display": display_value(item.raw_payload, "moq_display"),
-            "source_document": display_value(item.raw_payload, "source_document"),
-            "certificate_pdfs": certificate_pdfs(item.raw_payload),
-            "is_updated": bool((item.raw_payload or {}).get("is_updated")),
-            "received_at": email_received_dates.get(item.catalog_email_id) if getattr(item, "catalog_email_id", None) else None,
-        }
-        for item in sorted(filtered_items, key=lambda row: row.price_per_unit if row.price_per_unit is not None else float("inf"))[:limit]
-    ]
-
-
 @router.get("/emails")
 def list_catalog_emails(
     db: Session = Depends(get_db),
     limit: int = Query(10000, ge=1, le=10000),
     current_user: dict = Depends(get_current_user)
 ) -> list[dict]:
-    settings = get_settings()
     user_uuid = UUID(current_user["tenant_id"])
     item_count_subq = (
         select(func.count(CatalogItem.id))
@@ -213,29 +151,22 @@ def list_catalog_emails(
             CatalogEmail.processing_status != "certificate",
         )
     )
-    if not settings.mock_data_enabled:
-        stmt = stmt.where(CatalogEmail.raw_email_id.not_like("core-mock-catalog-%"))
     stmt = stmt.order_by(CatalogEmail.received_at.desc()).limit(limit)
-    try:
-        return [
-            {
-                "id": str(email.id),
-                "supplier_name": supplier_name,
-                "email_domain": email_domain,
-                "received_at": email.received_at,
-                "subject": email.subject,
-                "pdf_url": email.pdf_url,
-                "body_preview": email.body_preview,
-                "processing_status": email.processing_status,
-                "item_count": int(item_count or 0),
-                "duplicate_count": int(getattr(email, "duplicate_count", 0) or 0),
-            }
-            for email, supplier_name, email_domain, item_count in db.execute(stmt)
-        ]
-    except SQLAlchemyError:
-        if not settings.mock_data_enabled:
-            raise
-        return mock_catalog_emails(limit)
+    return [
+        {
+            "id": str(email.id),
+            "supplier_name": supplier_name,
+            "email_domain": email_domain,
+            "received_at": email.received_at,
+            "subject": email.subject,
+            "pdf_url": email.pdf_url,
+            "body_preview": email.body_preview,
+            "processing_status": email.processing_status,
+            "item_count": int(item_count or 0),
+            "duplicate_count": int(getattr(email, "duplicate_count", 0) or 0),
+        }
+        for email, supplier_name, email_domain, item_count in db.execute(stmt)
+    ]
 
 
 @router.get("/items")
@@ -247,7 +178,6 @@ def list_catalog_items(
     catalog_email_id: UUID | None = Query(None),
     current_user: dict = Depends(get_current_user)
 ) -> list[dict]:
-    settings = get_settings()
     user_uuid = UUID(current_user["tenant_id"])
     stmt = (
         select(CatalogItem, Supplier.name, Supplier.email_domain, Supplier.country, CatalogEmail.received_at, None)
@@ -303,9 +233,6 @@ def list_catalog_items(
     )
     if catalog_email_id is not None:
         stmt = stmt.where(CatalogItem.catalog_email_id == catalog_email_id)
-    if not settings.mock_data_enabled:
-        source = CatalogItem.raw_payload["source"].astext
-        stmt = stmt.where(or_(source.is_(None), source != "mock_extracted_catalogue"))
     if q:
         tokens = search_tokens(q)
         if tokens:
@@ -315,52 +242,47 @@ def list_catalog_items(
         else:
             stmt = stmt.where(CatalogItem.ingredient_name.ilike(f"%{q}%"))
     stmt = stmt.order_by(CatalogItem.ingredient_name.asc()).limit(limit)
-    try:
-        rows = [
-            {
-                "id": str(item.id),
-                "catalog_email_id": str(item.catalog_email_id) if item.catalog_email_id else None,
-                "supplier_name": supplier_name,
-                "email_domain": email_domain,
-                "country": (
-                    country
-                    if country and country != "Unknown"
-                    else (display_value(item.raw_payload, "country_of_origin") or display_value(item.raw_payload, "country") or "Unknown")
-                ),
-                "ingredient_name": item.ingredient_name,
-                "specification": display_value(item.raw_payload, "specification"),
-                "price_per_unit": nullable_float(item.price_per_unit),
-                "currency": item.currency,
-                "available_qty": nullable_float(item.available_qty),
-                "unit": item.unit,
-                "valid_until": item.valid_until,
-                "lead_time_days": getattr(item, "lead_time_days", None) if getattr(item, "lead_time_days", None) is not None else (item.raw_payload or {}).get("lead_time_days"),
-                "lead_time_text": display_value(item.raw_payload, "lead_time_text"),
-                "moq": getattr(item, "moq", None) if getattr(item, "moq", None) is not None else (item.raw_payload or {}).get("moq"),
-                "pack_size": display_value(item.raw_payload, "pack_size"),
-                "price_display": display_value(item.raw_payload, "price_display"),
-                "quantity_display": display_value(item.raw_payload, "quantity_display"),
-                "moq_display": display_value(item.raw_payload, "moq_display"),
-                "source_document": display_value(item.raw_payload, "source_document"),
-                "certificate_pdfs": certificate_pdfs(item.raw_payload),
-                "is_updated": bool((item.raw_payload or {}).get("is_updated")) or bool(history_count and history_count > 1),
-                "received_at": received_at,
-            }
-            for item, supplier_name, email_domain, country, received_at, history_count in db.execute(stmt)
-        ]
-        if q:
-            rows.sort(
-                key=lambda row: (
-                    -row_relevance(row, q),
-                    str(row.get("ingredient_name") or "").lower(),
-                    row.get("price_per_unit") if row.get("price_per_unit") is not None else float("inf"),
-                )
+    rows = [
+        {
+            "id": str(item.id),
+            "catalog_email_id": str(item.catalog_email_id) if item.catalog_email_id else None,
+            "supplier_name": supplier_name,
+            "email_domain": email_domain,
+            "country": (
+                country
+                if country and country != "Unknown"
+                else (display_value(item.raw_payload, "country_of_origin") or display_value(item.raw_payload, "country") or "Unknown")
+            ),
+            "ingredient_name": item.ingredient_name,
+            "specification": display_value(item.raw_payload, "specification"),
+            "price_per_unit": nullable_float(item.price_per_unit),
+            "currency": item.currency,
+            "available_qty": nullable_float(item.available_qty),
+            "unit": item.unit,
+            "valid_until": item.valid_until,
+            "lead_time_days": getattr(item, "lead_time_days", None) if getattr(item, "lead_time_days", None) is not None else (item.raw_payload or {}).get("lead_time_days"),
+            "lead_time_text": display_value(item.raw_payload, "lead_time_text"),
+            "moq": getattr(item, "moq", None) if getattr(item, "moq", None) is not None else (item.raw_payload or {}).get("moq"),
+            "pack_size": display_value(item.raw_payload, "pack_size"),
+            "price_display": display_value(item.raw_payload, "price_display"),
+            "quantity_display": display_value(item.raw_payload, "quantity_display"),
+            "moq_display": display_value(item.raw_payload, "moq_display"),
+            "source_document": display_value(item.raw_payload, "source_document"),
+            "certificate_pdfs": certificate_pdfs(item.raw_payload),
+            "is_updated": bool((item.raw_payload or {}).get("is_updated")) or bool(history_count and history_count > 1),
+            "received_at": received_at,
+        }
+        for item, supplier_name, email_domain, country, received_at, history_count in db.execute(stmt)
+    ]
+    if q:
+        rows.sort(
+            key=lambda row: (
+                -row_relevance(row, q),
+                str(row.get("ingredient_name") or "").lower(),
+                row.get("price_per_unit") if row.get("price_per_unit") is not None else float("inf"),
             )
-        return rows
-    except SQLAlchemyError:
-        if not settings.mock_data_enabled:
-            raise
-        return mock_catalog_items(q, limit)
+        )
+    return rows
 
 
 @router.get("/certificate-url")

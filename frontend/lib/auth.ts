@@ -42,11 +42,11 @@ export async function getSessionProfile(): Promise<SessionProfile | null> {
   return response.json();
 }
 
-export async function changePassword(password: string) {
+export async function changePassword(currentPassword: string, password: string) {
   const response = await authFetch(`${getApiBaseUrl()}/api/auth/change-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ current_password: currentPassword, password }),
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));

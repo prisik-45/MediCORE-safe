@@ -532,7 +532,7 @@ def async_remove_employee_cleanup(user_id: UUID):
         db.close()
 
 
-def async_delete_employee_cleanup(user_id: UUID):
+def async_delete_employee_cleanup(user_id: UUID, tenant_id: UUID):
     db = SessionLocal()
     try:
         from backend.app.models import EmailAccount, PasswordReset, EmailSyncSetting, EmployeeInvitation
@@ -542,7 +542,10 @@ def async_delete_employee_cleanup(user_id: UUID):
         except Exception as e:
             logger.warning(f"Could not resolve email from auth.users for user_id {user_id}: {e}")
         if email_val:
-            db.query(EmployeeInvitation).filter(EmployeeInvitation.email == email_val).delete(synchronize_session=False)
+            db.query(EmployeeInvitation).filter(
+                EmployeeInvitation.email == email_val,
+                EmployeeInvitation.tenant_id == tenant_id,
+            ).delete(synchronize_session=False)
         db.query(EmailAccount).filter(EmailAccount.user_id == user_id).delete(synchronize_session=False)
         db.query(PasswordReset).filter(PasswordReset.user_id == user_id).delete(synchronize_session=False)
         db.query(EmailSyncSetting).filter(EmailSyncSetting.user_id == user_id).delete(synchronize_session=False)
@@ -613,7 +616,7 @@ def delete_employee(
     db.commit()
     
     # Run the cascading deletes and invitation clean-ups in background
-    background_tasks.add_task(async_delete_employee_cleanup, user_id)
+    background_tasks.add_task(async_delete_employee_cleanup, user_id, tenant_uuid)
     
     return {"message": "Employee has been permanently deleted."}
 

@@ -45,8 +45,13 @@ if settings.environment.lower() != "production":
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
-# Trust forwarded headers from reverse proxies (Nginx)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+trusted_proxy_hosts = [
+    host.strip()
+    for host in settings.trusted_proxy_hosts.split(",")
+    if host.strip()
+]
+if trusted_proxy_hosts:
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxy_hosts)
 
 
 @app.middleware("http")
