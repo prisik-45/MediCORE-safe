@@ -955,6 +955,7 @@ class EmailIngestionService:
         prepared_items = []
         seen_in_document: set[tuple] = set()
         for item in items:
+            item = self._repair_misplaced_specification_fields(item)
             item = self._with_source_note(item, text)
             item = self._remove_unsupported_price(item, text)
             if not self._has_valid_ingredient_name(item):
@@ -1090,8 +1091,6 @@ class EmailIngestionService:
 
     def _with_source_note(self, item, text: str):
         notes = item.notes or ""
-        if "source=" in notes.lower() or "source:" in notes.lower():
-            return item
 
         ingredient = (item.ingredient_name or "").lower().strip()
         raw_source_phrase = (getattr(item, "raw_payload", None) or {}).get("source_phrase", "").lower().strip()
@@ -1103,28 +1102,133 @@ class EmailIngestionService:
             line_canonical = " ".join(re.sub(r"[^a-z0-9]+", " ", line_lower).split())
             ing_canonical = " ".join(re.sub(r"[^a-z0-9]+", " ", ingredient).split())
 
-            matched = (ingredient and ingredient in line_lower) or (ing_canonical and ing_canonical in line_canonical)
+            matched = self._ingredient_appears_in_line(ing_canonical, line_canonical)
             if not matched and raw_source_phrase:
                 matched = raw_source_phrase in line_lower
-            if not matched and ing_canonical:
-                tokens = [t for t in ing_canonical.split() if len(t) >= 4]
-                if tokens:
-                    matched = any(t in line_canonical for t in tokens)
 
-            if matched:
-                if item.price_per_unit is None or self._price_appears_in_line(item.price_per_unit, normalized_line):
-                    safe_line = normalized_line[:500].replace("'", "")
-                    joined_notes = f"{notes}; source='{safe_line}'" if notes else f"source='{safe_line}'"
-                    return item.model_copy(update={"notes": joined_notes})
-
-        if "[RAPIDOCR TABLE OCR]" in text or "[EXCEL TABLE]" in text or "[CSV TABLE]" in text or "[PDF INSPECTOR MARKDOWN]" in text or "[GRID CELL TABLE OCR]" in text:
-            safe_line = lines[0][:500].replace("'", "") if lines else "structured_table_row"
-            joined_notes = f"{notes}; source='{safe_line}'" if notes else f"source='{safe_line}'"
-            return item.model_copy(update={"notes": joined_notes})
+            if matched and self._commercial_values_appear_in_line(item, normalized_line):
+                safe_line = normalized_line[:500].replace("'", "")
+                joined_notes = f"{notes}; source='{safe_line}'" if notes else f"source='{safe_line}'"
+                return item.model_copy(update={"notes": joined_notes})
 
         return item
 
+    def _ingredient_appears_in_line(self, ingredient_canonical: str, line_canonical: str) -> bool:
+        if not ingredient_canonical or not line_canonical:
+            return False
+        if ingredient_canonical in line_canonical:
+            return True
+        tokens = [token for token in ingredient_canonical.split() if len(token) >= 4]
+        if len(tokens) <= 1:
+            return bool(tokens and tokens[0] in line_canonical)
+        matches = sum(1 for token in tokens if token in line_canonical)
+        return matches >= min(2, len(tokens))
+
+    def _commercial_values_appear_in_line(self, item, line: str) -> bool:
+        if item.price_per_unit is not None and not self._number_appears_in_line(item.price_per_unit, line):
+            return False
+        if item.available_qty is not None and not self._number_appears_in_line(item.available_qty, line):
+            return False
+        if item.moq is not None and not self._number_appears_in_line(item.moq, line):
+            return False
+        return True
+
+    def _repair_misplaced_specification_fields(self, item):
+        specification = clean_optional_text(getattr(item, "specification", None))
+        if not specification:
+            return item
+
+        updates: dict[str, Any] = {}
+        available_qty = getattr(item, "available_qty", None)
+        moq = getattr(item, "moq", None)
+        parsed_moq = self._moq_from_text(specification)
+        if moq is None and parsed_moq is not None:
+            updates["moq"] = parsed_moq
+            moq = parsed_moq
+
+        if self._specification_is_only_quantity_or_packaging(specification, available_qty, moq):
+            updates["specification"] = None
+
+        return item.model_copy(update=updates) if updates else item
+
+    def _specification_is_only_quantity_or_packaging(
+        self,
+        specification: str,
+        available_qty: Any | None,
+        moq: Any | None,
+    ) -> bool:
+        value = specification.strip()
+        if not value:
+            return True
+        if available_qty is not None and self._numbers_match(available_qty, value) and re.fullmatch(r"[\d,]+(?:\.\d+)?", value):
+            return True
+
+        remainder = value
+        for number in (available_qty, moq):
+            if number is None:
+                continue
+            remainder = self._remove_number_variant(remainder, number)
+        remainder = re.sub(
+            r"(?i)\b(?:qty|quantity|stock|available|vol(?:ume|um)?|moq|m\.?\s*o\.?\s*q\.?|minimum|order|"
+            r"packing|packaging|pack|kg|kgs|g|mg|ml|l|litre|liter|units?|packs?|bags?|drums?|cartons?)\b",
+            " ",
+            remainder,
+        )
+        remainder = re.sub(r"[^A-Za-z0-9%]+", " ", remainder).strip()
+        return not remainder
+
+    def _moq_from_text(self, value: str) -> float | None:
+        match = re.search(
+            r"(?i)\b(?:moq|m\.?\s*o\.?\s*q\.?|minimum\s+order|min(?:imum)?\s+qty|packing|packaging|pack)\s*:?\s*"
+            r"([0-9][0-9,]*(?:\.\d+)?)",
+            value,
+        )
+        if not match:
+            match = re.search(
+                r"(?i)\b([0-9][0-9,]*(?:\.\d+)?)\s*(?:kg|kgs|g|mg|ml|l|units?|packs?|bags?|drums?|cartons?)\s*"
+                r"(?:packing|packaging|pack)\b",
+                value,
+            )
+        if not match:
+            return None
+        try:
+            return float(match.group(1).replace(",", ""))
+        except ValueError:
+            return None
+
+    def _numbers_match(self, value: Any, text: str) -> bool:
+        try:
+            target = float(value)
+        except Exception:
+            return False
+        for match in re.finditer(r"\d[\d,]*(?:\.\d+)?", text):
+            try:
+                if abs(float(match.group(0).replace(",", "")) - target) < 0.0001:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def _remove_number_variant(self, text: str, value: Any) -> str:
+        try:
+            target = float(value)
+        except Exception:
+            return text
+        result = text
+        variants = {
+            f"{target:g}",
+            f"{target:.2f}",
+            f"{target:.4f}".rstrip("0").rstrip("."),
+            f"{int(target)}" if target.is_integer() else "",
+        }
+        for variant in sorted((item for item in variants if item), key=len, reverse=True):
+            result = re.sub(rf"(?<!\d){re.escape(variant)}(?!\d)", " ", result)
+        return result
+
     def _price_appears_in_line(self, value: Any, line: str) -> bool:
+        return self._number_appears_in_line(value, line)
+
+    def _number_appears_in_line(self, value: Any, line: str) -> bool:
         try:
             number = float(value)
         except Exception:
@@ -1137,6 +1241,15 @@ class EmailIngestionService:
             f"{number:.4f}".rstrip("0").rstrip("."),
         }
         return any(variant in compact_line for variant in variants if variant)
+
+    def _source_line_from_notes(self, notes: str | None) -> str | None:
+        if not notes:
+            return None
+        match = re.search(r"(?i)\bsource\s*[:=]\s*'([^']+)'", notes)
+        if match:
+            return match.group(1)
+        match = re.search(r"(?i)\bsource\s*[:=]\s*([^;]+)", notes)
+        return match.group(1).strip() if match else None
 
     def _remove_unsupported_price(self, item, text: str):
         if item.price_per_unit is None or self._item_has_price_evidence(item, text):
@@ -1189,19 +1302,18 @@ class EmailIngestionService:
             return False
         if item.available_qty is not None and float(item.available_qty) < 0:
             return False
-        if (
-            item.price_per_unit is None
-            and item.available_qty is None
-            and item.moq is None
-            and not clean_optional_text(getattr(item, "specification", None))
-            and not clean_optional_text(self._notes_payload(getattr(item, "notes", None)).get("specification"))
-        ):
-            return False
         notes = (item.notes or "").lower()
         # Every stored item must be traceable to an exact line in the source
         # email/attachment.  Commercial fields alone are not evidence: an LLM
         # may infer them from an address or a table heading.
-        return "source=" in notes or "source:" in notes
+        if "source=" not in notes and "source:" not in notes:
+            return False
+        source_line = self._source_line_from_notes(item.notes)
+        if not source_line:
+            return False
+        ingredient = " ".join(re.sub(r"[^a-z0-9]+", " ", str(item.ingredient_name or "").lower()).split())
+        source_canonical = " ".join(re.sub(r"[^a-z0-9]+", " ", source_line.lower()).split())
+        return self._ingredient_appears_in_line(ingredient, source_canonical) and self._commercial_values_appear_in_line(item, source_line)
 
     def _has_valid_ingredient_name(self, item) -> bool:
         return is_valid_ingredient_name(getattr(item, "ingredient_name", None))
@@ -2970,7 +3082,29 @@ class EmailIngestionService:
             match = re.search(r"source\s*[:=]\s*['\"]?([^'\"]+)", notes, flags=re.IGNORECASE)
             if match:
                 source = match.group(1).strip()
-            lines.append(source or f"{item.ingredient_name} {item.price_per_unit or ''} {item.unit or ''}".strip())
+
+            price = ""
+            if item.price_per_unit is not None:
+                price = f"{item.currency or ''} {item.price_per_unit}/{item.unit or ''}".strip()
+            quantity = ""
+            if item.available_qty is not None:
+                quantity = f"qty {item.available_qty} {item.unit or ''}".strip()
+            moq = f"MOQ {item.moq}" if item.moq is not None else ""
+            source_is_generic = source.lower() in {"visible row text", "row text", "visible text"}
+            visible_evidence = " | ".join(
+                value
+                for value in [
+                    item.ingredient_name,
+                    item.specification,
+                    price,
+                    quantity,
+                    item.lead_time_text,
+                    moq,
+                    notes,
+                ]
+                if value
+            )
+            lines.append(visible_evidence if source_is_generic or not source else f"{item.ingredient_name} | {source} | {visible_evidence}")
         return "\n".join(line for line in lines if line)
 
     def _upload_file(self, file_path: Path, raw_email_id: str, mime_type: str) -> tuple[str, str]:

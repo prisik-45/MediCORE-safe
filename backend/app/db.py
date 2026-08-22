@@ -1,8 +1,9 @@
 from collections.abc import Iterator
 import logging
+import os
 import urllib.parse
 
-from sqlalchemy import URL, create_engine
+from sqlalchemy import URL, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from supabase import Client, create_client
 
@@ -145,6 +146,7 @@ _SessionLocal = None
 _ai_readonly_engine = None
 _AIReadOnlySessionLocal = None
 startup_error = None
+_schema_compatibility_checked = False
 
 try:
     _engine = create_app_engine()
@@ -191,6 +193,7 @@ def SessionLocal(*args, **kwargs):
         raise RuntimeError(
             f"Database initialization failed at startup. Error: {startup_error}"
         ) from startup_error
+    ensure_runtime_schema_compatibility()
     return _SessionLocal(*args, **kwargs)
 
 
@@ -210,6 +213,38 @@ def get_db() -> Iterator[Session]:
         yield db
     finally:
         db.close()
+
+
+def ensure_runtime_schema_compatibility() -> None:
+    """Apply non-destructive schema compatibility fixes required by current code.
+
+    This keeps dev/staging databases from crashing when an additive migration was
+    not applied before a new API/worker image starts. It deliberately avoids data
+    cleanup or destructive migrations.
+    """
+    global _schema_compatibility_checked
+    if _schema_compatibility_checked or _engine is None:
+        return
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    if _engine.dialect.name != "postgresql":
+        _schema_compatibility_checked = True
+        return
+
+    statements = [
+        "alter table public.catalog_emails add column if not exists sender_address text",
+        "alter table public.catalog_emails add column if not exists retry_count integer not null default 0",
+        "alter table public.catalog_emails add column if not exists last_attempt_at timestamptz",
+        "alter table public.catalog_emails alter column supplier_id drop not null",
+    ]
+    try:
+        with _engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+        _schema_compatibility_checked = True
+    except Exception:
+        logger.exception("Failed applying runtime schema compatibility checks")
+        raise
 
 
 def close_database_engines() -> None:

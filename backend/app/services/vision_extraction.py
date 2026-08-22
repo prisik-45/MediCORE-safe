@@ -84,8 +84,10 @@ def extract_catalog_items_from_image_with_openrouter_vision(
                     "content": (
                         "Extract supplier catalogue rows from the image. Output only minified JSON shaped as "
                         "{\"items\":[{ingredient_name,specification,price_per_unit,currency,available_qty,unit,valid_until,lead_time_days,lead_time_text,moq,notes}]}. "
-                        "Use null for missing fields. Do not invent, convert, or round values. Obey table headers: Qty/Quantity is stock, Price/Rate is price. "
-                        "Put concise source evidence and terms in notes using source='visible row text'. No markdown or explanation."
+                        "Use null for missing fields. Do not invent, convert, or round values. Column order is not fixed; map each cell by header and content. "
+                        "Qty/Quantity/Volume/Stock is available_qty, never specification or price. Price/Rate/FOB/CIF/EXW is price. MOQ/Packing/Pack is moq, never specification. "
+                        "Specification is only grade, purity, assay, standard, description, CAS, or composition text. "
+                        "Put the exact visible row excerpt in notes as source='item name, price, quantity, and terms'. No markdown or explanation."
                     ),
                 },
                 {

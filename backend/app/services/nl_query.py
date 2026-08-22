@@ -238,6 +238,8 @@ class NaturalLanguageQueryEngine:
         extracted_phrase = self._extract_ingredient_phrase(question)
         if not extracted_phrase:
             return IngredientMatchResult("", None, [], None, 0.0)
+        if tenant_id is None:
+            return IngredientMatchResult(extracted_phrase, None, [], None, 0.0)
 
         resolver = ProductResolver(self.db)
         res = resolver.resolve_product(extracted_phrase, tenant_id=tenant_id)
@@ -284,6 +286,13 @@ class NaturalLanguageQueryEngine:
         return self._best_ingredient_result_from_candidates(extracted_phrase, names)
 
     def _execute_matched_ingredient_query(self, search_phrase: str, matched_names: list[str], tenant_id: Any | None = None) -> list[dict[str, Any]]:
+        if tenant_id is None:
+            return []
+        try:
+            tenant_uuid = UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id
+        except (ValueError, TypeError):
+            return []
+
         stmt = (
             select(
                 CatalogItem.id,
@@ -300,15 +309,24 @@ class NaturalLanguageQueryEngine:
                 Supplier.email_domain,
                 Supplier.country,
                 Supplier.certifications,
+                CatalogEmail.received_at,
             )
             .join(Supplier, CatalogItem.supplier_id == Supplier.id)
-            .where(CatalogItem.ingredient_name.in_(matched_names))
+            .join(CatalogEmail, CatalogEmail.id == CatalogItem.catalog_email_id)
+            .where(
+                CatalogItem.ingredient_name.in_(matched_names),
+                CatalogItem.tenant_id == tenant_uuid,
+                Supplier.tenant_id == tenant_uuid,
+                CatalogEmail.tenant_id == tenant_uuid,
+                CatalogEmail.processing_status.in_(["completed", "partial", "certificate"]),
+            )
+            .order_by(
+                CatalogItem.price_per_unit.asc().nullslast(),
+                CatalogEmail.received_at.desc(),
+                Supplier.name.asc(),
+                CatalogItem.ingredient_name.asc(),
+            )
         )
-        if tenant_id:
-            try:
-                stmt = stmt.where(CatalogItem.tenant_id == (UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id))
-            except (ValueError, TypeError):
-                pass
 
         try:
             results = self.db.execute(stmt).all()
@@ -433,14 +451,10 @@ class NaturalLanguageQueryEngine:
         return "I can help you search catalogues, compare supplier prices, check unit costs, and evaluate MOQ and lead times. Please name an ingredient or product to query MediCORE data."
 
     def _personal_assistant_answer(self, question: str, tenant_id: Any | None = None) -> str:
-        try:
-            return self.llm.personal_assistant_answer(question, tenant_id=tenant_id)
-        except TypeError as exc:
-            if "tenant_id" not in str(exc):
-                raise
-            return self.llm.personal_assistant_answer(question)
-        except Exception:
-            return "I am MediCORE AI Assistant, specialized in pharmaceutical procurement and catalogue price analysis."
+        return (
+            "ProcuraAI is focused on MediCORE procurement data, including supplier catalogues, prices, "
+            "availability, certificates, MOQ, and lead times. Please ask about a supplier, ingredient, or catalogue item."
+        )
 
     def _ingredient_clarification_answer(self, phrase: str, result: IngredientMatchResult) -> str:
         if result.suggestions:

@@ -29,6 +29,7 @@ def test_real_ingredient_names_remain_valid() -> None:
         "Nicotinamide",
         "Methylcobalamin",
         "Biotin",
+        "Sucralose",
         "Ashwagandha Extract",
         "Zinc Glycinate",
         "5-Amino-1-methylquinolinium Chloride",

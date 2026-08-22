@@ -100,7 +100,7 @@ CHEMICAL_NAME_HINT_PATTERN = re.compile(
     r"\b(?:acid|chloride|citrate|sulphate|sulfate|oxide|hydroxide|carbonate|stearate|"
     r"extract|powder|vitamin|sodium|potassium|magnesium|calcium|zinc|amino|methyl|ethyl|"
     r"hcl|usp|bp|ip|ep|jp|nf|api|dc\s*grade|anhydrous|monohydrate|dihydrate|carotene|"
-    r"ashwagandha|berberine|curcumin|riboflavin|nicotinamide|biotin|inositol|glycine|creatine)\b"
+    r"ashwagandha|berberine|curcumin|riboflavin|nicotinamide|biotin|inositol|glycine|creatine|sucralose)\b"
     r"|\b[A-Z][a-z]+(?:in|ine|ol|one|ide|ate|amine|azole|cillin|mycin|statin|profen|oside|olide|methane)\b",
     re.IGNORECASE,
 )

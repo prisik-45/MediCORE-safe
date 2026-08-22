@@ -136,6 +136,23 @@ CERTIFICATE_FIELD_TERMS = (
     "conforms",
     "complies",
 )
+CERTIFICATE_CORE_TERMS = (
+    "certificate of analysis",
+    "coa",
+    "batch no",
+    "batch number",
+    "lot no",
+    "lot number",
+    "manufacturing date",
+    "expiry date",
+    "retest date",
+    "test result",
+    "result",
+    "conforms",
+    "complies",
+    "approved by",
+    "checked by",
+)
 
 PRICE_UPDATE_SENTENCE_PATTERN = re.compile(
     r"\b(?:price|rate)\s+(?:of|for)\s+"
@@ -185,6 +202,7 @@ def classify_document(
     structured_catalogue_rows = _structured_catalogue_row_count(raw_text)
     catalogue_header_score = _term_score(combined_source, CATALOGUE_HEADER_TERMS)
     line_item_rows = _line_item_row_count(raw_text)
+    product_profile_sections = _product_profile_section_count(raw_text)
 
     catalogue_score += extraction_quality * 0.8
     certificate_score += extraction_quality * 0.8
@@ -200,9 +218,14 @@ def classify_document(
         catalogue_score += 3
     if line_item_rows >= 2:
         catalogue_score += 5
+    if product_profile_sections >= 3:
+        catalogue_score += 8
+    elif product_profile_sections >= 2:
+        catalogue_score += 5
 
     certificate_field_score = _term_score(combined_source, CERTIFICATE_FIELD_TERMS)
-    if certificate_field_score >= 2 and product_spec_rows < 3:
+    certificate_core_score = _term_score(combined_source, CERTIFICATE_CORE_TERMS)
+    if certificate_field_score >= 2 and product_spec_rows < 3 and product_profile_sections < 2:
         # A heading can be lost in a scan, but two or more analytical/batch
         # fields identify the document as a certificate rather than a quote.
         certificate_score += certificate_field_score + 2
@@ -248,10 +271,27 @@ def classify_document(
     if top_score <= 0 or extraction_quality < 0.25:
         return DocumentClassification(REVIEW, _confidence(top_score, runner_up_score, extraction_quality), None)
 
-    if is_cert_file and certificate_field_score >= 1:
+    strong_catalogue_structure = (
+        product_spec_rows >= 5
+        or product_profile_sections >= 3
+        or (has_catalogue_header and product_spec_rows >= 2)
+        or (structured_catalogue_rows >= 2 and catalogue_header_score >= 2)
+        or line_item_rows >= 2
+    )
+    strong_certificate_structure = (
+        certificate_core_score >= 2
+        and certificate_field_score >= 2
+        and product_profile_sections < 2
+        and product_spec_rows < 5
+    )
+
+    if strong_catalogue_structure and not strong_certificate_structure:
+        return DocumentClassification(CATALOGUE, _confidence(catalogue_score, max(certificate_score, other_score), extraction_quality), None)
+
+    if is_cert_file and certificate_field_score >= 1 and not strong_catalogue_structure:
         return DocumentClassification(CERTIFICATE, _confidence(certificate_score, max(catalogue_score, other_score), extraction_quality), _material_hint(filename, text))
 
-    if certificate_score >= 2 and certificate_field_score >= 1 and structured_catalogue_rows < 2:
+    if certificate_score >= 2 and certificate_field_score >= 1 and structured_catalogue_rows < 2 and not strong_catalogue_structure:
         return DocumentClassification(CERTIFICATE, _confidence(certificate_score, max(catalogue_score, other_score), extraction_quality), _material_hint(filename, text))
 
     if (has_catalogue_header and product_spec_rows >= 2) or product_spec_rows >= 5:
@@ -351,6 +391,60 @@ def _structured_catalogue_row_count(text: str) -> int:
 
 def _line_item_row_count(text: str) -> int:
     return sum(1 for line in text.splitlines() if CATALOGUE_LINE_ITEM_PATTERN.search(" ".join(line.split())))
+
+
+def _product_profile_section_count(text: str) -> int:
+    lines = [" ".join(line.split()).strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return 0
+
+    field_hits = sum(
+        1
+        for line in lines
+        if re.search(
+            r"\b(?:latin\s+name|part\s+used|active\s+ingredients?|advantages?|source|fermentation\s+method|specis|species)\b",
+            line,
+            re.IGNORECASE,
+        )
+    )
+    if field_hits < 3:
+        return 0
+
+    title_count = 0
+    number_words = {
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+    }
+    field_pattern = re.compile(
+        r"\b(?:latin\s+name|part\s+used|active\s+ingredients?|advantages?|source|fermentation\s+method|specis|species)\b",
+        re.IGNORECASE,
+    )
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if field_pattern.search(line):
+            continue
+        starts_with_number = bool(re.match(r"^(?:\d+|" + "|".join(number_words) + r")\b", lowered))
+        looks_like_product_title = starts_with_number or bool(
+            re.search(r"\b(?:extract|powder|enzyme|lactase|lycopene|nattokinase|berberine|ginseng|garlic|thistle)\b", line, re.IGNORECASE)
+        )
+        if not looks_like_product_title:
+            continue
+        nearby_fields = sum(1 for next_line in lines[index + 1 : index + 7] if field_pattern.search(next_line))
+        if nearby_fields >= 2:
+            title_count += 1
+
+    if title_count:
+        return title_count
+    return field_hits // 3
 
 
 def _table_cells(line: str) -> list[str]:
