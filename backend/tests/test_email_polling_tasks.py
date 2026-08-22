@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -63,3 +63,28 @@ def test_logged_email_retry_rules_allow_only_one_failed_or_partial_attempt():
     assert not service._is_retryable_logged_email("partial_permanent")
     assert not service._is_retryable_logged_email("completed")
     assert MAX_EMAIL_RETRY_ATTEMPTS == 1
+
+
+def test_processing_email_is_retryable_only_after_stale_window():
+    service = EmailIngestionService(db=SimpleNamespace())
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+
+    fresh = SimpleNamespace(
+        processing_status="processing",
+        last_attempt_at=now - timedelta(minutes=10),
+        received_at=now - timedelta(hours=2),
+    )
+    stale = SimpleNamespace(
+        processing_status="processing",
+        last_attempt_at=now - timedelta(minutes=31),
+        received_at=now - timedelta(hours=2),
+    )
+    completed = SimpleNamespace(
+        processing_status="completed",
+        last_attempt_at=now - timedelta(hours=2),
+        received_at=now - timedelta(hours=2),
+    )
+
+    assert not service._is_stale_processing_email(fresh, now=now)
+    assert service._is_stale_processing_email(stale, now=now)
+    assert not service._is_stale_processing_email(completed, now=now)

@@ -11,7 +11,7 @@ import tempfile
 import zipfile
 
 from urllib.parse import unquote, urlparse
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.message import Message
 from pathlib import Path
 from typing import Any
@@ -57,6 +57,7 @@ MAX_ATTACHMENT_COUNT = 10
 IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 CLASSIFIABLE_DOCUMENT_EXTENSIONS = {".pdf", ".docx"}
 MAX_EMAIL_RETRY_ATTEMPTS = 1
+STALE_PROCESSING_RETRY_AFTER = timedelta(minutes=30)
 
 SUPPLIER_INTENT_TERMS = (
     "catalog",
@@ -352,7 +353,10 @@ class EmailIngestionService:
         if existing_status and not allow_logged_retry:
             logger.info("Skipping already-logged email id=%s status=%s", raw_email_id, existing_status)
             return 0
-        if existing_status and not self._is_retryable_logged_email(existing_status):
+        if existing_status and not (
+            self._is_retryable_logged_email(existing_status)
+            or self._status_key(existing_status) == "processing"
+        ):
             logger.info("Skipping non-retryable logged email id=%s status=%s", raw_email_id, existing_status)
             return 0
 
@@ -409,6 +413,7 @@ class EmailIngestionService:
             catalog_email.pdf_url = None
             catalog_email.body_preview = self._body_preview(body_preview_text)
             catalog_email.duplicate_count = 0
+            catalog_email.last_attempt_at = datetime.now(UTC)
         else:
             catalog_email = CatalogEmail(
                 id=uuid4(),
@@ -421,6 +426,7 @@ class EmailIngestionService:
                 received_at=email_date,
                 processing_status="processing",
                 duplicate_count=0,
+                last_attempt_at=datetime.now(UTC),
             )
             self.db.add(catalog_email)
         self.db.flush()
@@ -449,6 +455,7 @@ class EmailIngestionService:
                     file_path = Path(tmp_dir) / target_name
                     file_path.write_bytes(payload)
                     uploaded_url, object_path = self._upload_file(file_path, raw_email_id, mime_type)
+                    uploaded_object_paths.append(object_path)
 
                     if ext in IMAGE_ATTACHMENT_EXTENSIONS:
                         image_items = self._extract_catalogue_items_from_image(file_path, tenant_id=active_tenant_id)
@@ -458,7 +465,6 @@ class EmailIngestionService:
                                 len(image_items),
                                 target_name,
                             )
-                            uploaded_object_paths.append(object_path)
                             if not catalog_email.pdf_url:
                                 catalog_email.pdf_url = uploaded_url
                             image_text = self._catalogue_item_evidence_text(image_items)
@@ -509,10 +515,11 @@ class EmailIngestionService:
                                 }
                             )
                             logger.info("Stored certificate document %s for email id=%s", target_name, raw_email_id)
+                            if object_path in uploaded_object_paths:
+                                uploaded_object_paths.remove(object_path)
                             continue
 
                         if classification.category != CATALOGUE:
-                            uploaded_object_paths.append(object_path)
                             logger.info("Skipping non-catalogue document %s after classification", target_name)
                             continue
 
@@ -520,7 +527,6 @@ class EmailIngestionService:
                         logger.info("Catalogue extraction text for %s has %s characters", target_name, len(text))
                     else:
                         logger.info("Skipping document classifier for non-PDF attachment %s", target_name)
-                    uploaded_object_paths.append(object_path)
                     if not catalog_email.pdf_url:
                         catalog_email.pdf_url = uploaded_url
 
@@ -694,6 +700,7 @@ class EmailIngestionService:
                     continue
                 file_path.write_bytes(content)
                 catalog_email.processing_status = "processing"
+                catalog_email.last_attempt_at = datetime.now(UTC)
                 catalog_email.duplicate_count = 0
                 if force:
                     self.db.query(CatalogItem).filter(
@@ -1884,6 +1891,20 @@ class EmailIngestionService:
         if key.endswith("_permanent"):
             return False
         return key.startswith(("failed", "error", "partial"))
+
+    def _is_stale_processing_email(
+        self,
+        email_row: CatalogEmail,
+        now: datetime | None = None,
+    ) -> bool:
+        if self._status_key(email_row.processing_status) != "processing":
+            return False
+        reference_time = email_row.last_attempt_at or email_row.received_at
+        if not reference_time:
+            return False
+        if reference_time.tzinfo is None:
+            reference_time = reference_time.replace(tzinfo=UTC)
+        return (now or datetime.now(UTC)) - reference_time >= STALE_PROCESSING_RETRY_AFTER
 
     def _terminal_retry_status(self, status: str | None) -> str:
         key = self._status_key(status)
@@ -3348,13 +3369,20 @@ class EmailIngestionService:
                 skipped_logged_email_ids = set()
                 retryable_logged_email_ids = set()
                 from backend.app.models import CatalogEmail
-                res = self.db.query(CatalogEmail).filter(CatalogEmail.tenant_id == active_tenant_id).all()
+                account_prefix = f"{account_id}:"
+                res = self.db.query(CatalogEmail).filter(
+                    CatalogEmail.tenant_id == active_tenant_id,
+                    CatalogEmail.raw_email_id.like(f"{account_prefix}%"),
+                ).all()
                 exhausted_retry_count = 0
                 for email_row in res:
                     raw_stored_id = email_row.raw_email_id
                     status = email_row.processing_status
                     base_id = self._raw_email_base_id(raw_stored_id, account_id)
-                    if retry_failed_once and self._is_retryable_logged_email(status):
+                    is_retryable = self._is_retryable_logged_email(status) or self._is_stale_processing_email(
+                        email_row
+                    )
+                    if retry_failed_once and is_retryable:
                         current_retry_count = int(email_row.retry_count or 0)
                         if current_retry_count < MAX_EMAIL_RETRY_ATTEMPTS:
                             retryable_logged_email_ids.add(base_id)

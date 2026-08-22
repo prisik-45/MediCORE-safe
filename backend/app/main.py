@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO)
@@ -21,8 +22,21 @@ from backend.app.api import (
     webhooks,
 )
 from backend.app.config import get_settings
+from backend.app.db import close_database_engines
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("MediCORE API startup complete")
+    try:
+        yield
+    finally:
+        logger.info("MediCORE API shutdown started")
+        close_database_engines()
+        logger.info("MediCORE API shutdown complete")
 
 allowed_origins = {
     settings.frontend_origin.rstrip("/"),
@@ -43,7 +57,7 @@ if settings.environment.lower() != "production":
     )
     allow_origin_regex = r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$"
 
-app = FastAPI(title=settings.app_name, version="0.1.0")
+app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
 trusted_proxy_hosts = [
     host.strip()
@@ -88,9 +102,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logger = logging.getLogger(__name__)
-
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

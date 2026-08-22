@@ -212,6 +212,15 @@ def get_db() -> Iterator[Session]:
         db.close()
 
 
+def close_database_engines() -> None:
+    global _ai_readonly_engine
+    if _engine is not None:
+        _engine.dispose()
+    if _ai_readonly_engine is not None:
+        _ai_readonly_engine.dispose()
+        _ai_readonly_engine = None
+
+
 def get_supabase() -> Client:
     return create_client(str(settings.supabase_url), settings.supabase_service_role_key)
 
