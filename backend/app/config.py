@@ -63,6 +63,7 @@ class Settings(BaseSettings):
 
     gmail_api_sender: str = ""
     superadmin_email_id: str = "prisik.da45@gmail.com"
+    price_fx_rates_json: str = Field(default='{"INR": 1.0}', repr=False)
 
     @property
     def queue_url(self) -> str:

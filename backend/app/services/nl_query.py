@@ -319,7 +319,7 @@ class NaturalLanguageQueryEngine:
         for r in results:
             price = float(r.price_per_unit) if r.price_per_unit is not None else None
             qty = float(r.available_qty) if r.available_qty is not None else None
-            curr = r.currency or "INR"
+            curr = r.currency or ""
             unit = r.unit or "kg"
             rows.append({
                 "item_id": str(r.id),

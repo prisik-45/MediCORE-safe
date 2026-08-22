@@ -958,6 +958,11 @@ class EmailIngestionService:
                 raw_payload["pack_size"] = pack_size
             raw_payload.update(self._compact_payload(self._notes_payload(item.notes)))
             raw_payload.update(self._compact_payload(self._exact_display_payload(item, text)))
+            corrections = self._corrections_from_notes(item.notes)
+            if corrections:
+                raw_payload["corrections"] = corrections
+            if item.price_per_unit is not None and not clean_optional_text(item.currency):
+                raw_payload["currency_not_stated"] = True
             
             # MOQ and packing are the same thing: sync item.moq and raw_payload["pack_size"]
             if item.moq is None:
@@ -989,7 +994,7 @@ class EmailIngestionService:
                 if item.price_per_unit is not None:
                     existing_item.price_per_unit = item.price_per_unit
                     existing_item.currency = item.currency
-                elif (item.currency or "").upper() != "INR":
+                elif clean_optional_text(item.currency):
                     existing_item.currency = item.currency
                 if item.available_qty is not None:
                     existing_item.available_qty = item.available_qty
@@ -1125,6 +1130,14 @@ class EmailIngestionService:
             return False
         if item.available_qty is not None and float(item.available_qty) < 0:
             return False
+        if (
+            item.price_per_unit is None
+            and item.available_qty is None
+            and item.moq is None
+            and not clean_optional_text(getattr(item, "specification", None))
+            and not clean_optional_text(self._notes_payload(getattr(item, "notes", None)).get("specification"))
+        ):
+            return False
         notes = (item.notes or "").lower()
         # Every stored item must be traceable to an exact line in the source
         # email/attachment.  Commercial fields alone are not evidence: an LLM
@@ -1229,16 +1242,27 @@ class EmailIngestionService:
 
     def _commercial_updates_from_text(self, text: str) -> dict[str, Any]:
         updates: dict[str, Any] = {}
-        currency_pattern = r"(?:USD|\$|INR|Rs\.?|₹|EUR|€|GBP|£)"
+        currency_pattern = r"(?:US\$|A\$|C\$|S\$|\$|USD|INR|Rs\.?|₹|EUR|€|GBP|£|CAD|AUD|SGD|CHF|AED|CNY|JPY|KRW|¥|₩)"
         price_match = re.search(
             rf"(?i)(?:updated\s+price|revised\s+price|new\s+price|price)\s*[:\-]?\s*({currency_pattern})?\s*([0-9][0-9,]*(?:\.\d+)?)",
             text,
         )
         if price_match:
             currency_token = (price_match.group(1) or "").upper()
-            currency = "USD" if currency_token == "$" else "INR" if currency_token in {"RS", "RS.", "₹"} else currency_token
+            currency = (
+                "USD" if currency_token in {"$", "US$"}
+                else "INR" if currency_token in {"RS", "RS.", "₹"}
+                else "EUR" if currency_token == "€"
+                else "GBP" if currency_token == "£"
+                else "AUD" if currency_token == "A$"
+                else "CAD" if currency_token == "C$"
+                else "SGD" if currency_token == "S$"
+                else "CNY" if currency_token == "¥"
+                else "KRW" if currency_token == "₩"
+                else currency_token
+            )
             updates["price_per_unit"] = float(price_match.group(2).replace(",", ""))
-            updates["currency"] = currency or "INR"
+            updates["currency"] = currency or ""
 
         moq_match = re.search(r"(?i)\bMOQ\b\s*[:\-]?\s*([0-9][0-9,]*(?:\.\d+)?)", text)
         if moq_match:
@@ -1582,7 +1606,7 @@ class EmailIngestionService:
             supplier_id=supplier.id,
             ingredient_name=ingredient_name,
             price_per_unit=None,
-            currency="INR",
+            currency="",
             available_qty=None,
             unit="kg",
             valid_until=None,
@@ -1711,6 +1735,21 @@ class EmailIngestionService:
                 if cleaned_value:
                     payload[key.strip()] = cleaned_value
         return payload
+
+    def _corrections_from_notes(self, notes: str | None) -> list[dict[str, str]]:
+        raw_value = self._notes_payload(notes).get("auto_corrections")
+        if not raw_value:
+            return []
+        corrections: list[dict[str, str]] = []
+        for item in raw_value.split("|"):
+            field, separator, rest = item.partition(":")
+            original, arrow, corrected = rest.partition("->")
+            field = field.strip()
+            original = original.strip()
+            corrected = corrected.strip()
+            if separator and arrow and field and original and corrected:
+                corrections.append({"field": field, "from": original, "to": corrected, "rule": "normalizer_auto_correction"})
+        return corrections
 
     def _compact_payload(self, payload: dict) -> dict:
         cleaned: dict = {}

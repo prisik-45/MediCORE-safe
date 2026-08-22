@@ -42,25 +42,54 @@ INGREDIENT_TYPO_REPLACEMENTS = {
 }
 
 
-def clean_ingredient_name(name: str) -> str:
+def _apply_text_replacements(value: str, replacements: dict[str, str]) -> tuple[str, list[dict[str, str]]]:
+    cleaned = value
+    corrections: list[dict[str, str]] = []
+    for pattern, repl in replacements.items():
+        next_value, count = re.subn(pattern, repl, cleaned, flags=re.IGNORECASE)
+        if count and next_value != cleaned:
+            corrections.append({"from": cleaned, "to": next_value, "rule": pattern})
+        cleaned = next_value
+    return cleaned, corrections
+
+
+def clean_ingredient_name_with_corrections(name: str) -> tuple[str, list[dict[str, str]]]:
     name = clean_optional_text(name) or ""
     for pattern in COLUMN_PREFIX_PATTERNS:
         name = re.sub(pattern, "", name, flags=re.IGNORECASE).strip()
-    for pattern, repl in INGREDIENT_TYPO_REPLACEMENTS.items():
-        name = re.sub(pattern, repl, name, flags=re.IGNORECASE)
-    return name.strip()
+    name, corrections = _apply_text_replacements(name, INGREDIENT_TYPO_REPLACEMENTS)
+    return name.strip(), [{"field": "ingredient_name", **correction} for correction in corrections]
+
+
+def clean_ingredient_name(name: str) -> str:
+    cleaned, _ = clean_ingredient_name_with_corrections(name)
+    return cleaned
+
+
+def clean_specification_with_corrections(spec: str | None) -> tuple[str | None, list[dict[str, str]]]:
+    cleaned = clean_optional_text(spec)
+    if not cleaned:
+        return None, []
+    cleaned = re.sub(r"^\s*%\s*(\d+(?:\.\d+)?)\s*$", r"\1%", cleaned)
+    cleaned, corrections = _apply_text_replacements(cleaned, SPEC_REPLACEMENTS)
+    return cleaned.strip(), [{"field": "specification", **correction} for correction in corrections]
 
 
 def clean_specification(spec: str | None) -> str | None:
-    cleaned = clean_optional_text(spec)
-    if not cleaned:
-        return None
-    cleaned = re.sub(r"^\s*%\s*66\s*$", "99%", cleaned)
-    cleaned = re.sub(r"^\s*66\s*%\s*$", "99%", cleaned)
-    cleaned = re.sub(r"^\s*%\s*(\d+(?:\.\d+)?)\s*$", r"\1%", cleaned)
-    for pattern, repl in SPEC_REPLACEMENTS.items():
-        cleaned = re.sub(pattern, repl, cleaned, flags=re.IGNORECASE)
-    return cleaned.strip()
+    cleaned, _ = clean_specification_with_corrections(spec)
+    return cleaned
+
+
+def _append_correction_notes(notes: str | None, corrections: list[dict[str, str]]) -> str | None:
+    cleaned_notes = clean_optional_text(notes)
+    if not corrections:
+        return cleaned_notes
+    encoded = "|".join(
+        f"{correction['field']}:{correction['from']}->{correction['to']}"
+        for correction in corrections
+    )
+    suffix = f"auto_corrections={encoded}"
+    return f"{cleaned_notes}; {suffix}" if cleaned_notes else suffix
 
 
 def normalize_item(item: ExtractedCatalogItem) -> ExtractedCatalogItem:
@@ -70,16 +99,18 @@ def normalize_item(item: ExtractedCatalogItem) -> ExtractedCatalogItem:
         raw_unit = cleaned_unit.strip().lower()
         unit = UNIT_ALIASES.get(raw_unit, raw_unit)
 
-    ingredient_name = clean_ingredient_name(item.ingredient_name) or item.ingredient_name
-    specification = clean_specification(item.specification)
+    ingredient_name, ingredient_corrections = clean_ingredient_name_with_corrections(item.ingredient_name)
+    ingredient_name = ingredient_name or item.ingredient_name
+    specification, specification_corrections = clean_specification_with_corrections(item.specification)
+    corrections = [*ingredient_corrections, *specification_corrections]
 
     return item.model_copy(
         update={
             "ingredient_name": ingredient_name,
             "unit": unit,
-            "currency": (clean_optional_text(item.currency) or "INR").upper(),
+            "currency": (clean_optional_text(item.currency) or "").upper(),
             "specification": specification,
             "lead_time_text": clean_optional_text(item.lead_time_text),
-            "notes": clean_optional_text(item.notes),
+            "notes": _append_correction_notes(item.notes, corrections),
         }
     )

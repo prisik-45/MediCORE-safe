@@ -422,11 +422,11 @@ def column_name_from_header(header: str, fallback: str) -> str:
 def clean_text(text: str) -> str:
     replacements = {
         "|": " ",
-        "â€”": "-",
-        "â€“": "-",
-        "Ã¢â‚¬â€": "-",
-        "Ã¢â‚¬â€œ": "-",
-        "Ã¢â‚¬Â": "",
+        "\u00e2\u20ac\u201d": "-",
+        "\u00e2\u20ac\u201c": "-",
+        "\u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u009d": "-",
+        "\u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u0153": "-",
+        "\u00c3\u00a2\u00e2\u201a\u00ac\u00c2\u009d": "",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
@@ -516,11 +516,11 @@ def extract_price_parts(text: str) -> tuple[str, str]:
     currency = ""
     if re.search(r"\$|USD", text or "", flags=re.IGNORECASE):
         currency = "USD"
-    elif re.search(r"â‚¹|INR|Rs\.?", text or "", flags=re.IGNORECASE):
+    elif re.search(r"₹|INR|Rs\.?", text or "", flags=re.IGNORECASE):
         currency = "INR"
-    elif re.search(r"â‚¬|EUR", text or "", flags=re.IGNORECASE):
+    elif re.search(r"€|EUR", text or "", flags=re.IGNORECASE):
         currency = "EUR"
-    elif re.search(r"Â£|GBP", text or "", flags=re.IGNORECASE):
+    elif re.search(r"£|GBP", text or "", flags=re.IGNORECASE):
         currency = "GBP"
     if (
         re.search(r"\b(?:CIF|FOB|EXW|CNF|C&F)\b", text or "", flags=re.IGNORECASE)
@@ -528,7 +528,7 @@ def extract_price_parts(text: str) -> tuple[str, str]:
     ):
         return "", currency
     match = re.search(
-        r"((?:CIF|FOB|EXW|CNF|C&F)?\s*[A-Za-z ./-]*?(?:\$|USD|INR|Rs\.?|â‚¹|EUR|â‚¬|GBP|Â£\s*)?\s*\d[\d,]*(?:\.\d+)?(?:\s*/\s*[A-Za-z]+)?)",
+        r"((?:CIF|FOB|EXW|CNF|C&F)?\s*[A-Za-z ./-]*?(?:\$|USD|INR|Rs\.?|₹|EUR|€|GBP|£|CAD|AUD|SGD|CHF|AED|CNY|JPY|¥|₩|A\$|C\$|S\$\s*)?\s*\d[\d,]*(?:\.\d+)?(?:\s*/\s*[A-Za-z]+)?)",
         text or "",
         flags=re.IGNORECASE,
     )

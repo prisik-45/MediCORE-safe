@@ -63,7 +63,7 @@ class CatalogItem(Base):
     supplier_id: Mapped[UUID] = mapped_column(ForeignKey("suppliers.id"), index=True)
     ingredient_name: Mapped[str] = mapped_column(String(255))
     price_per_unit: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
-    currency: Mapped[str] = mapped_column(String(8), default="INR")
+    currency: Mapped[str] = mapped_column(String(8), default="")
     available_qty: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
     unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

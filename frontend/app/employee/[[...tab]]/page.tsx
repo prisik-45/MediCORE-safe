@@ -406,15 +406,19 @@ function isProcurementCatalogEmail(email: CatalogEmailRow): boolean {
 }
 
 function getBasePrice(price: number, currency: string): number {
-  const curr = (currency || "INR").toUpperCase();
-  if (curr === "USD") return price * 83;
-  if (curr === "CAD") return price * 61;
-  if (curr === "AUD") return price * 55;
+  const curr = (currency || "").toUpperCase();
+  if (!curr || curr !== "INR") return Number.POSITIVE_INFINITY;
   return price;
 }
 
-function formatMoney(value: number, currency = "INR"): string {
-  const curr = (currency || "INR").toUpperCase();
+function formatMoney(value: number, currency = ""): string {
+  const curr = (currency || "").toUpperCase();
+  if (!curr) {
+    return `${value.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })} (currency not stated)`;
+  }
 
   let symbol = curr;
   if (curr === "INR") symbol = "₹";
@@ -473,7 +477,7 @@ function formatQuantity(value: number): string {
 }
 
 function safePrice(value: number | null | undefined, currency?: string): number {
-  return value == null ? Number.POSITIVE_INFINITY : getBasePrice(value, currency || "INR");
+  return value == null ? Number.POSITIVE_INFINITY : getBasePrice(value, currency || "");
 }
 
 function safeQty(value: number | null | undefined): number {
@@ -584,7 +588,14 @@ function isNumericOnlyDisplay(value: unknown): boolean {
 }
 
 function displayPrice(item: Pick<SupplierItem, "price_display" | "price_per_unit" | "currency" | "unit">): string {
-  if (!isMissingDisplayValue(item.price_display) && !isNumericOnlyDisplay(item.price_display)) return String(item.price_display);
+  const hasCurrency = Boolean((item.currency || "").trim());
+  if (!isMissingDisplayValue(item.price_display) && !isNumericOnlyDisplay(item.price_display)) {
+    const display = String(item.price_display);
+    if (!hasCurrency && item.price_per_unit != null && !/(USD|INR|EUR|GBP|CAD|AUD|SGD|CHF|AED|CNY|JPY|KRW|\$|₹|€|£|¥|₩)/i.test(display)) {
+      return `${display} (currency not stated)`;
+    }
+    return display;
+  }
   if (item.price_per_unit == null) return "-";
   return `${formatMoney(item.price_per_unit, item.currency)}/${item.unit || "unit"}`;
 }
@@ -1213,7 +1224,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
         latest_item: email.subject || bestItem?.ingredient_name || "Email stored, extraction pending",
         received_at: email.received_at,
         latest_price: bestItem?.price_per_unit ?? 0,
-        latest_currency: bestItem?.currency ?? "INR",
+        latest_currency: bestItem?.currency ?? "",
         latest_qty: bestItem?.available_qty ?? 0,
         latest_unit: bestItem?.unit ?? "",
         status_label: statusLabel,

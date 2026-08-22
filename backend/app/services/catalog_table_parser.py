@@ -48,14 +48,13 @@ QUOTE_ROW_PATTERN = re.compile(
     r"(?:packing|packaging|pack)\b))*)"
     r"\s+"
     r"(?P<price_terms>(?:(?:CIF|FOB|EXW|CNF|C&F)\s+[A-Za-z ./-]+?\s+)*)"
-    r"(?:(?P<currency>US\$|\$|USD|INR|Rs\.?|₹|EUR|€)\s*)?"
+    r"(?:(?P<currency>US\$|\$|USD|INR|Rs\.?|₹|EUR|€|GBP|£|CAD|AUD|SGD|CHF|AED|CNY|JPY|¥|₩|A\$|C\$|S\$)\s*)?"
     r"(?P<price>\d[\d,]*(?:\.\d+)?)"
     r"\s*/\s*(?P<price_unit>[A-Za-z]+)"
     r"(?:\s+(?P<lead>\d+\s*(?:-|to)\s*\d+\s*days?|\d+\s*days?))?"
     r"\s*$",
     re.IGNORECASE,
 )
-HEADER_CURRENCY_PATTERN = re.compile(r"price\s*\(\s*(?P<currency>[A-Z$₹€]+)\s*\)", re.IGNORECASE)
 PRICE_UPDATE_SENTENCE_PATTERNS = (
     re.compile(
         r"\b(?:price|rate)\s+(?:of|for)\s+"
@@ -78,16 +77,15 @@ PRICE_UPDATE_SENTENCE_PATTERNS = (
         r"\b(?:price|rate)\s+(?:of|for)\s+"
         r"(?P<product>[A-Za-z0-9][A-Za-z0-9 %().,+/'-]{2,120}?)\s+"
         r"(?:is|:|-)\s*"
-        r"(?:(?P<currency>US\$|\$|USD|INR|Rs\.?|â‚¹|EUR|â‚¬|GBP|Â£)\s*)?"
+        r"(?:(?P<currency>US\$|\$|USD|INR|Rs\.?|₹|EUR|€|GBP|£|CAD|AUD|SGD|CHF|AED|CNY|JPY|¥|₩|A\$|C\$|S\$)\s*)?"
         r"(?P<price>\d[\d,]*(?:\.\d+)?)\s*/\s*(?P<price_unit>[A-Za-z]+)",
         re.IGNORECASE,
     ),
 )
 HEADER_UNIT_PATTERN = re.compile(r"(?:quantity|qty|stock|available|vol(?:ume|um)?)\s*(?:\(\s*|\bin\s+)?(?P<unit>[A-Za-z]+)\s*\)?", re.IGNORECASE)
-HEADER_CURRENCY_PATTERN = re.compile(r"(?:price|rate|quote|cost|unit price)\s*\(\s*(?P<currency>[A-Z$â‚¹â‚¬]+)\s*\)", re.IGNORECASE)
 HEADER_MOQ_UNIT_PATTERN = re.compile(r"(?:MOQ|M\.?O\.?Q\.?|minimum order|min qty|minimum quantity|packing|packaging|pack size|pack)\s*(?:\(\s*|\bin\s+)?(?P<unit>[A-Za-z]+)\s*\)?", re.IGNORECASE)
 HEADER_LEAD_TIME_UNIT_PATTERN = re.compile(r"(?:lead\s*time|lead|delivery|dispatch|delivery\s*time)\s*(?:\(\s*|\bin\s+)?(?P<unit>days?|weeks?|months?)\s*\)?", re.IGNORECASE)
-HEADER_CURRENCY_PATTERN = re.compile(r"(?:price|rate|quote|cost|unit price|fob|cif|exw|cnf|c&f|ddp|dap)?\s*\(\s*(?P<currency>US\$|USD|INR|Rs\.?|\$|â‚¹|EUR|â‚¬|GBP|Â£|CAD|AUD|SGD|CHF|AED|CNY|JPY)(?:\s*/\s*(?P<unit>[A-Za-z]+))?\s*\)", re.IGNORECASE)
+HEADER_CURRENCY_PATTERN = re.compile(r"(?:price|rate|quote|cost|unit price|fob|cif|exw|cnf|c&f|ddp|dap)?\s*\(\s*(?P<currency>US\$|USD|INR|Rs\.?|\$|₹|EUR|€|GBP|£|CAD|AUD|SGD|CHF|AED|CNY|JPY|¥|₩|A\$|C\$|S\$)(?:\s*/\s*(?P<unit>[A-Za-z]+))?\s*\)", re.IGNORECASE)
 MOQ_PATTERN = re.compile(
     r"\b(?:MOQ|M\.?O\.?Q\.?|minimum\s+order|min\s+qty|minimum\s+quantity|packing|packaging|pack\s+size|pack)\s*:?\s*(?P<moq>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>kg|g|mg|ml|l|units?|packs?|bags?|drums?|cartons?)\b"
     r"|\b(?P<moq2>\d[\d,]*(?:\.\d+)?)\s*(?P<unit2>kg|g|mg|ml|l|units?|packs?|bags?|drums?|cartons?)\s*(?:packing|packaging|pack|bag|drum|carton)\b",
@@ -99,10 +97,23 @@ PRODUCT_CODE_HEADER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 CHEMICAL_NAME_HINT_PATTERN = re.compile(
-    r"[a-z]{3,}|(?:acid|chloride|citrate|extract|powder|vitamin|sodium|magnesium|zinc|amino|methyl|quinolinium|hcl|usp|bp|ip)\b",
+    r"\b(?:acid|chloride|citrate|sulphate|sulfate|oxide|hydroxide|carbonate|stearate|"
+    r"extract|powder|vitamin|sodium|potassium|magnesium|calcium|zinc|amino|methyl|ethyl|"
+    r"hcl|usp|bp|ip|ep|jp|nf|api|dc\s*grade|anhydrous|monohydrate|dihydrate|carotene|"
+    r"ashwagandha|berberine|curcumin|riboflavin|nicotinamide|biotin|inositol|glycine|creatine)\b"
+    r"|\b[A-Z][a-z]+(?:in|ine|ol|one|ide|ate|amine|azole|cillin|mycin|statin|profen|oside|olide|methane)\b",
     re.IGNORECASE,
 )
-STANDALONE_PRICE_PATTERN = re.compile(r"^(?:US\$|\$|USD|INR|Rs\.?|₹|EUR|€)?\s*\d[\d,]*(?:\.\d+)?\s*$", re.IGNORECASE)
+BOILERPLATE_INGREDIENT_PATTERN = re.compile(
+    r"\b(?:dear|regards|sincerely|thank\s+you|kindly|please|terms?|conditions?|payment|"
+    r"delivery\s+within|attached|attachment|page\s+\d+|gst|gstin|pan\s+no|cin|invoice|"
+    r"looking\s+forward|best\s+wishes|warm\s+regards|yours\s+(?:faithfully|sincerely)|"
+    r"contact|email|phone|tel|website|address|notes?|supplier|company|inventory|catalogue|catalog|"
+    r"total|updated|price\s+list|bank|account|ifsc|swift|validity|quote\s+valid|"
+    r"organic\s+botanicals|conventional\s+botanicals|nutraceuticals)\b",
+    re.IGNORECASE,
+)
+STANDALONE_PRICE_PATTERN = re.compile(r"^(?:US\$|\$|USD|INR|Rs\.?|₹|EUR|€|GBP|£|CAD|AUD|SGD|CHF|AED|CNY|JPY|¥|₩|A\$|C\$|S\$)?\s*\d[\d,]*(?:\.\d+)?\s*$", re.IGNORECASE)
 FOOTER_OR_HEADER_PATTERN = re.compile(
     r"^(?:real-time raw material|sanyuan jinrui|tel:|add:|jinrui product code|product name|"
     r"product specification description|fob\s*\()",
@@ -409,7 +420,7 @@ def _parse_quotation_row(line: str, context: dict[str, str | None]) -> Extracted
     qty_extra = (match.group("qty_extra") or "").strip()
     price_terms = (match.group("price_terms") or "").strip()
     lead_text = (match.group("lead") or "").strip()
-    currency = _currency_code(match.group("currency") or context.get("currency") or "INR")
+    currency = _currency_code(match.group("currency") or context.get("currency"))
     moq, moq_unit = _extract_moq(qty_extra)
     notes = _notes(
         original_quantity=f"{match.group('qty')} {qty_unit}".strip(),
@@ -800,7 +811,7 @@ def _header_cell_metadata(header: str | None) -> dict[str, str | None]:
     unit = _unit_from_price_header(cleaned) or _header_unit_from_text(cleaned)
     field: str | None = None
 
-    if re.search(r"\b(?:fob|cif|exw|cnf|c&f|ddp|dap|price|rate|quote|cost)\b|[$â‚¹â‚¬Â£]\s*/|(?:usd|inr|eur|gbp|cad|aud|sgd|chf|aed|cny|jpy)\s*/", lowered, re.IGNORECASE):
+    if re.search(r"\b(?:fob|cif|exw|cnf|c&f|ddp|dap|price|rate|quote|cost)\b|[$₹€£¥₩]\s*/|(?:usd|inr|eur|gbp|cad|aud|sgd|chf|aed|cny|jpy)\s*/", lowered, re.IGNORECASE):
         field = "price"
     elif re.search(r"\b(?:moq|m\.?\s*o\.?\s*q\.?|minimum\s+order|minimum\s+quantity|min\s+qty|min\s+order|pack|packing|packaging|pack\s*size)\b", lowered):
         field = "moq"
@@ -826,9 +837,9 @@ def _clean_header_text(header: str | None) -> str:
         "（": "(",
         "）": ")",
         "／": "/",
-        "Â£": "GBP",
-        "â‚¹": "INR",
-        "â‚¬": "EUR",
+        "\u00c2\u00a3": "£",
+        "\u00e2\u201a\u00b9": "₹",
+        "\u00e2\u201a\u00ac": "€",
     }
     for source, target in replacements.items():
         text = text.replace(source, target)
@@ -885,14 +896,12 @@ def is_valid_ingredient_name(name: object) -> bool:
         return False
     if len(value) < 3:
         return False
+    if BOILERPLATE_INGREDIENT_PATTERN.search(value):
+        return False
     if CHEMICAL_NAME_HINT_PATTERN.search(value):
         return True
     if re.search(r"[A-Za-z]", value) and len(re.findall(r"[A-Za-z]{2,}", value)) >= 2:
-        return not re.search(
-            r"\b(?:contact|email|phone|tel|website|address|notes?|supplier|company|inventory|catalogue|catalog|"
-            r"total|updated|price\s+list|sheet|table|organic botanicals|conventional botanicals|nutraceuticals)\b",
-            lowered,
-        )
+        return True
     return False
 
 
@@ -920,16 +929,34 @@ def _currency_code(raw: str | None) -> str:
         return "INR"
     if value in {"€", "EUR"}:
         return "EUR"
+    if value in {"£", "GBP"}:
+        return "GBP"
+    if value in {"A$", "AUD"}:
+        return "AUD"
+    if value in {"C$", "CAD"}:
+        return "CAD"
+    if value in {"S$", "SGD"}:
+        return "SGD"
+    if value in {"CHF"}:
+        return "CHF"
+    if value in {"AED"}:
+        return "AED"
+    if value in {"¥", "CNY"}:
+        return "CNY"
+    if value in {"JPY"}:
+        return "JPY"
+    if value in {"₩", "KRW"}:
+        return "KRW"
     return value or ""
 
 
 def _currency_from_text(raw: str | None) -> str | None:
     if not raw:
         return None
-    code_match = re.search(r"(?<![A-Z])(?:USD|INR|EUR|GBP|CAD|AUD|SGD|CHF|AED|CNY|JPY|Rs\.?)(?![A-Z])", raw, flags=re.IGNORECASE)
+    code_match = re.search(r"(?<![A-Z])(?:USD|INR|EUR|GBP|CAD|AUD|SGD|CHF|AED|CNY|JPY|KRW|Rs\.?)(?![A-Z])", raw, flags=re.IGNORECASE)
     if code_match:
         return code_match.group(0)
-    match = re.search(r"(US\$|\$|₹|€|(?<![A-Z])(?:USD|INR|EUR|Rs\.?)(?![A-Z]))", raw, flags=re.IGNORECASE)
+    match = re.search(r"(US\$|A\$|C\$|S\$|\$|₹|€|£|¥|₩|(?<![A-Z])(?:USD|INR|EUR|GBP|CAD|AUD|SGD|CHF|AED|CNY|JPY|KRW|Rs\.?)(?![A-Z]))", raw, flags=re.IGNORECASE)
     return match.group(1) if match else None
 
 
@@ -959,6 +986,8 @@ def _format_original_price(price_text: str, currency: str, price_unit: str) -> s
         prefix = "INR "
     elif currency == "EUR":
         prefix = "EUR "
+    elif currency == "GBP":
+        prefix = "GBP "
     else:
         prefix = f"{currency} "
     return f"{prefix}{cleaned_price}/{price_unit}".strip()
@@ -1097,6 +1126,8 @@ def _display_price_with_header_currency(value: str, currency: str, unit: str | N
             display = f"INR {cleaned}"
         elif currency == "EUR":
             display = f"EUR {cleaned}"
+        elif currency == "GBP":
+            display = f"GBP {cleaned}"
         else:
             display = f"{currency} {cleaned}".strip()
     price_unit = unit or _unit_from_price_header(header)

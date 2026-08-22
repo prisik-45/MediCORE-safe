@@ -592,7 +592,7 @@ async def upload_certificate(
         supplier_id=supplier.id,
         ingredient_name=target_ingredient,
         price_per_unit=None,
-        currency="INR",
+        currency="",
         available_qty=None,
         unit="kg",
         raw_payload=raw_payload,
