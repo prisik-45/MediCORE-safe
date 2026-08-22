@@ -29,6 +29,7 @@ def list_suppliers(
         .where(
             CatalogEmail.supplier_id == Supplier.id,
             CatalogEmail.tenant_id == user_uuid,
+            CatalogEmail.processing_status.in_(["completed", "partial", "certificate"]),
         )
         .scalar_subquery()
     )
@@ -36,7 +37,10 @@ def list_suppliers(
         Supplier,
         item_count_subq.label("item_count"),
         last_catalog_subq.label("last_catalog_at"),
-    ).where(Supplier.tenant_id == user_uuid)
+    ).where(
+        Supplier.tenant_id == user_uuid,
+        item_count_subq > 0,
+    )
 
     rows = db.execute(stmt.order_by(Supplier.name.asc()))
     return [

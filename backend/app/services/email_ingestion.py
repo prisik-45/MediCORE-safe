@@ -180,17 +180,53 @@ class _HTMLTextExtractor(HTMLParser):
         super().__init__()
         self.parts: list[str] = []
         self._skip_depth = 0
+        self._in_table = False
+        self._in_row = False
+        self._cell_chunks: list[str] = []
+        self._row_cells: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag.lower() in {"script", "style", "head", "meta", "title", "noscript"}:
+        tag_name = tag.lower()
+        if tag_name in {"script", "style", "head", "meta", "title", "noscript"}:
             self._skip_depth += 1
-        if tag.lower() in {"br", "p", "div", "li", "tr"}:
+            return
+        if self._skip_depth:
+            return
+        if tag_name == "table":
+            self._in_table = True
+            self.parts.append("\n")
+        elif tag_name == "tr":
+            self._in_row = True
+            self._row_cells = []
+            self._cell_chunks = []
+        elif tag_name in {"td", "th"} and self._in_row:
+            self._cell_chunks = []
+        elif tag_name in {"br", "p", "div", "li"}:
             self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"script", "style", "head", "meta", "title", "noscript"} and self._skip_depth:
+        tag_name = tag.lower()
+        if tag_name in {"script", "style", "head", "meta", "title", "noscript"} and self._skip_depth:
             self._skip_depth -= 1
-        if tag.lower() in {"p", "div", "li", "tr"}:
+            return
+        if self._skip_depth:
+            return
+        if tag_name in {"td", "th"} and self._in_row:
+            cell_text = " ".join(" ".join(self._cell_chunks).split())
+            self._row_cells.append(cell_text)
+            self._cell_chunks = []
+        elif tag_name == "tr":
+            row = [cell for cell in self._row_cells if cell]
+            if row:
+                self.parts.append(" | ".join(row))
+                self.parts.append("\n")
+            self._row_cells = []
+            self._cell_chunks = []
+            self._in_row = False
+        elif tag_name == "table":
+            self._in_table = False
+            self.parts.append("\n")
+        elif tag_name in {"p", "div", "li"}:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
@@ -198,10 +234,15 @@ class _HTMLTextExtractor(HTMLParser):
             return
         cleaned = " ".join(data.split())
         if cleaned:
-            self.parts.append(cleaned)
+            if self._in_row:
+                self._cell_chunks.append(cleaned)
+            else:
+                if self.parts and self.parts[-1] not in {"\n", " "}:
+                    self.parts.append(" ")
+                self.parts.append(cleaned)
 
     def text(self) -> str:
-        return "\n".join(self.parts)
+        return "".join(self.parts)
 
 
 class EmailIngestionService:
@@ -409,6 +450,7 @@ class EmailIngestionService:
             )
             catalog_email.processing_status = "processing"
             catalog_email.subject = subject
+            catalog_email.sender_address = sender
             catalog_email.received_at = email_date
             catalog_email.pdf_url = None
             catalog_email.body_preview = self._body_preview(body_preview_text)
@@ -419,6 +461,7 @@ class EmailIngestionService:
                 id=uuid4(),
                 tenant_id=active_tenant_id,
                 supplier_id=supplier.id,
+                sender_address=sender,
                 raw_email_id=raw_email_id,
                 subject=subject,
                 pdf_url=None,
@@ -1961,8 +2004,27 @@ class EmailIngestionService:
         return [term.strip().lower() for term in (raw or "").split(",") if term.strip()]
 
     def _text_matches_any(self, text: str, terms: list[str]) -> bool:
-        text_lower = text.lower()
-        return any(term in text_lower for term in terms)
+        for term in terms:
+            normalized = str(term or "").strip().lower()
+            if not normalized:
+                continue
+            if len(normalized) <= 3 or re.fullmatch(r"[a-z0-9]+", normalized):
+                if re.search(rf"(?<![A-Za-z0-9]){re.escape(normalized)}(?![A-Za-z0-9])", text, re.IGNORECASE):
+                    return True
+                continue
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(normalized)}(?![A-Za-z0-9])", text, re.IGNORECASE):
+                return True
+        return False
+
+    def _has_api_product_context(self, subject: str, attachment_names: str) -> bool:
+        context = f"{subject} {attachment_names}"
+        return bool(
+            re.search(r"(?<![A-Za-z0-9])api(?![A-Za-z0-9])", context, flags=re.IGNORECASE)
+            and re.search(
+                r"(?i)\b(?:catalog|catalogue|price|pricing|quote|quotation|offer|coa|certificate|specification)\b",
+                context,
+            )
+        )
 
     def _sender_matches_any(self, sender: str, display_name: str, terms: list[str]) -> bool:
         sender_lower = sender.lower()
@@ -1989,7 +2051,11 @@ class EmailIngestionService:
         labels_lower = labels.lower()
         body_sample = body_text[:4000].lower()
         combined = f"{sender_lower} {subject_lower} {body_sample}"
-        strong_supplier_terms = [term for term in SUPPLIER_INTENT_TERMS if term not in {"offer", "price", "pricing"}]
+        strong_supplier_terms = [
+            term
+            for term in SUPPLIER_INTENT_TERMS
+            if term not in {"api", "offer", "price", "pricing", "stock", "bulk"}
+        ]
 
         marketing_headers = (
             "promotions" in labels_lower
@@ -2001,7 +2067,7 @@ class EmailIngestionService:
         has_supplier_intent = self._text_matches_any(combined, strong_supplier_terms)
         has_irrelevant_terms = self._text_matches_any(combined, list(IRRELEVANT_MAIL_TERMS))
 
-        if marketing_headers and not has_supplier_intent:
+        if marketing_headers:
             return True
         if has_irrelevant_terms and not has_supplier_intent:
             return True
@@ -2016,8 +2082,9 @@ class EmailIngestionService:
         attachments: list[dict],
     ) -> bool:
         attachment_names = " ".join(str(att.get("filename", "")) for att in attachments)
-        text = f"{subject} {attachment_names} {body_text[:8000]}".lower()
-        if self._text_matches_any(text, list(SUPPLIER_INTENT_TERMS)):
+        text = f"{subject} {attachment_names} {body_text[:8000]}"
+        intent_terms = [term for term in SUPPLIER_INTENT_TERMS if term != "api"]
+        if self._text_matches_any(text, intent_terms) or self._has_api_product_context(subject, attachment_names):
             return True
 
         # Structured/image attachments from a supplier mailbox are often terse, e.g. "July rates.xlsx".
@@ -3684,6 +3751,7 @@ class EmailIngestionService:
             if existing:
                 existing.processing_status = f"failed: {public_error}"[:50]
                 existing.pdf_url = None
+                existing.sender_address = sender
                 existing.body_preview = self._body_preview(body_text)
                 if email_date:
                     existing.received_at = email_date
@@ -3696,6 +3764,7 @@ class EmailIngestionService:
                 id=uuid4(),
                 tenant_id=tenant_id or supplier.tenant_id,
                 supplier_id=supplier.id,
+                sender_address=sender,
                 raw_email_id=raw_email_id,
                 subject=subject,
                 pdf_url=None,
@@ -3729,17 +3798,17 @@ class EmailIngestionService:
                 .first()
             )
             if existing:
-                if existing.body_preview:
-                    existing.body_preview = None
-                    self.db.commit()
+                existing.sender_address = sender
+                existing.body_preview = None
+                self.db.commit()
                 return
 
-            supplier = self._upsert_supplier(sender, display_name=display_name, tenant_id=tenant_id)
             self.db.add(
                 CatalogEmail(
                     id=uuid4(),
-                    tenant_id=tenant_id or supplier.tenant_id,
-                    supplier_id=supplier.id,
+                    tenant_id=tenant_id,
+                    supplier_id=None,
+                    sender_address=sender,
                     raw_email_id=raw_email_id,
                     subject=subject,
                     pdf_url=None,

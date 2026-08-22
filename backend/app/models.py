@@ -37,7 +37,8 @@ class CatalogEmail(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
-    supplier_id: Mapped[UUID] = mapped_column(ForeignKey("suppliers.id"))
+    supplier_id: Mapped[UUID | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
+    sender_address: Mapped[str | None] = mapped_column(Text)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     raw_email_id: Mapped[str] = mapped_column(Text)
     subject: Mapped[str | None] = mapped_column(Text)
@@ -48,7 +49,7 @@ class CatalogEmail(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    supplier: Mapped[Supplier] = relationship(back_populates="emails")
+    supplier: Mapped[Supplier | None] = relationship(back_populates="emails")
 
 
 class CatalogItem(Base):

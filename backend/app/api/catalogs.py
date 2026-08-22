@@ -142,7 +142,7 @@ def list_catalog_emails(
     )
     stmt = (
         select(CatalogEmail, Supplier.name, Supplier.email_domain, item_count_subq.label("item_count"))
-        .join(Supplier, Supplier.id == CatalogEmail.supplier_id)
+        .outerjoin(Supplier, Supplier.id == CatalogEmail.supplier_id)
         .where(
             CatalogEmail.tenant_id == user_uuid,
             CatalogEmail.processing_status != "deleted",
@@ -155,8 +155,8 @@ def list_catalog_emails(
     return [
         {
             "id": str(email.id),
-            "supplier_name": supplier_name,
-            "email_domain": email_domain,
+            "supplier_name": supplier_name or email.sender_address or "Skipped email",
+            "email_domain": email_domain or email.sender_address,
             "received_at": email.received_at,
             "subject": email.subject,
             "pdf_url": email.pdf_url,
@@ -351,7 +351,7 @@ def sync_diagnostics(
             Supplier.name.label("supplier_name"),
             func.count(CatalogItem.id).label("item_count"),
         )
-        .join(Supplier, Supplier.id == CatalogEmail.supplier_id)
+        .outerjoin(Supplier, Supplier.id == CatalogEmail.supplier_id)
         .outerjoin(CatalogItem, CatalogItem.catalog_email_id == CatalogEmail.id)
         .filter(CatalogEmail.tenant_id == tenant_uuid)
         .group_by(CatalogEmail.id, Supplier.name)
@@ -382,7 +382,7 @@ def sync_diagnostics(
             {
                 "id": str(email.id),
                 "raw_email_id": email.raw_email_id,
-                "supplier_name": supplier_name,
+                "supplier_name": supplier_name or email.sender_address or "Skipped email",
                 "subject": email.subject,
                 "received_at": email.received_at.isoformat() if email.received_at else None,
                 "processing_status": email.processing_status,

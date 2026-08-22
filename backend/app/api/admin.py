@@ -133,7 +133,13 @@ def get_database_stats(db: Session = Depends(get_db), current_user: dict = Depen
     employees = db.query(Profile).filter(Profile.tenant_id == tenant_uuid, Profile.role == "employee").all()
     org_user_ids = [tenant_uuid] + [emp.id for emp in employees]
     
-    total_suppliers = db.query(Supplier).filter(Supplier.tenant_id.in_(org_user_ids)).distinct().count()
+    total_suppliers = (
+        db.query(Supplier.id)
+        .join(CatalogItem, CatalogItem.supplier_id == Supplier.id)
+        .filter(Supplier.tenant_id.in_(org_user_ids), CatalogItem.tenant_id.in_(org_user_ids))
+        .distinct()
+        .count()
+    )
     total_ingredients = db.query(CatalogItem.ingredient_name).filter(CatalogItem.tenant_id.in_(org_user_ids)).distinct().count()
     
     # simple PgDatabase size fallback if not in postgres

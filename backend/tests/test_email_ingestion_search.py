@@ -3,7 +3,7 @@ from email.message import EmailMessage
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from backend.app.models import CatalogItem
+from backend.app.models import CatalogEmail, CatalogItem
 from backend.app.schemas import ExtractedCatalogItem
 from backend.app.services.catalog_table_parser import parse_catalog_table_text
 from backend.app.services.country_detection import detect_supplier_country
@@ -95,6 +95,78 @@ class EmailIngestionSearchCriteriaTest(unittest.TestCase):
         attachments = [{"filename": "supplier-catalogue.jpeg", "ext": ".jpeg"}]
 
         self.assertTrue(self.service._has_supplier_catalogue_intent("", "", attachments))
+
+    def test_supplier_intent_does_not_match_short_terms_inside_words(self) -> None:
+        self.assertFalse(self.service._text_matches_any("rapid capital therapies update", ["api"]))
+        self.assertFalse(self.service._text_matches_any("stockholm conference agenda", ["stock"]))
+        self.assertTrue(self.service._text_matches_any("API price list attached", ["api"]))
+
+    def test_marketing_headers_are_hard_skipped(self) -> None:
+        message = EmailMessage()
+        message["List-Unsubscribe"] = "<https://supplier.example/unsubscribe>"
+
+        skipped = self.service._is_irrelevant_or_marketing_email(
+            message=message,
+            sender="updates@supplier.example",
+            subject="Monthly offer",
+            body_text="New product offer and stock updates",
+            labels="",
+            list_unsubscribe=message["List-Unsubscribe"],
+            precedence="",
+        )
+
+        self.assertTrue(skipped)
+
+    def test_html_email_table_preserves_rows_for_parser_input(self) -> None:
+        message = EmailMessage()
+        message.set_content(
+            "<html><body><table>"
+            "<tr><th>Product</th><th>Grade</th><th>Price USD/kg</th><th>MOQ</th></tr>"
+            "<tr><td>Ascorbic Acid</td><td>USP</td><td>480.00</td><td>25 kg</td></tr>"
+            "</table><p>Germany warehouse</p></body></html>",
+            subtype="html",
+        )
+
+        body = self.service._get_email_body_text(message)
+
+        self.assertIn("Product | Grade | Price USD/kg | MOQ", body)
+        self.assertIn("Ascorbic Acid | USP | 480.00 | 25 kg", body)
+        self.assertIn("Germany warehouse", body)
+
+    def test_skipped_email_tombstone_does_not_create_supplier(self) -> None:
+        added = []
+
+        class FakeQuery:
+            def filter(self, *args, **kwargs):
+                return self
+
+            def first(self):
+                return None
+
+        service = object.__new__(EmailIngestionService)
+        service.db = SimpleNamespace(
+            query=lambda *args, **kwargs: FakeQuery(),
+            add=lambda row: added.append(row),
+            commit=lambda: None,
+            rollback=lambda: None,
+        )
+        service._upsert_supplier = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("supplier created"))
+
+        service._create_skipped_email_record(
+            "account:INBOX:1",
+            "newsletter@example.com",
+            "Newsletter",
+            "Promo",
+            "skipped: newsletter or promotional email",
+            "tenant-id",
+            body_text="personal body",
+        )
+
+        self.assertEqual(len(added), 1)
+        self.assertIsInstance(added[0], CatalogEmail)
+        self.assertIsNone(added[0].supplier_id)
+        self.assertEqual(added[0].sender_address, "newsletter@example.com")
+        self.assertIsNone(added[0].body_preview)
 
     def test_store_catalog_items_counts_duplicate_rows_in_same_document(self) -> None:
         added = []
