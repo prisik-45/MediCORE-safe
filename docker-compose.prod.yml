@@ -106,6 +106,35 @@ services:
       - worker
       - --loglevel=info
       - --concurrency=4
+      - -Q
+      - celery,ingest
+    depends_on:
+      valkey:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: medicore-beat:${MEDICORE_IMAGE_TAG:-prod}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: production
+      APP_NAME: MediCORE
+      API_BASE_URL: ${API_BASE_URL:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-}
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
+      REDIS_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
+    command:
+      - celery
+      - -A
+      - backend.app.tasks
+      - beat
+      - --loglevel=info
     depends_on:
       valkey:
         condition: service_healthy

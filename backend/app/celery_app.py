@@ -21,6 +21,14 @@ celery_app.conf.update(
         "socket_connect_timeout": 3,
         "socket_timeout": 10,
     },
+    task_soft_time_limit=1500,
+    task_time_limit=1800,
+    worker_max_tasks_per_child=20,
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    task_routes={
+        "backend.app.tasks.poll_email_account": {"queue": "ingest"},
+    },
     beat_schedule={
         "poll-inbox-every-3-minutes": {
             "task": "backend.app.tasks.poll_inbox",

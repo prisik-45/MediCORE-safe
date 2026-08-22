@@ -45,6 +45,8 @@ class CatalogEmail(Base):
     body_preview: Mapped[str | None] = mapped_column(Text)
     processing_status: Mapped[str] = mapped_column(String(50), default="queued")
     duplicate_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     supplier: Mapped[Supplier] = relationship(back_populates="emails")
 

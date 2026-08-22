@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 MAX_ATTACHMENT_COUNT = 10
 IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 CLASSIFIABLE_DOCUMENT_EXTENSIONS = {".pdf", ".docx"}
+MAX_EMAIL_RETRY_ATTEMPTS = 1
 
 SUPPLIER_INTENT_TERMS = (
     "catalog",
@@ -345,10 +346,14 @@ class EmailIngestionService:
         raw_email_id: str,
         parse_targets: list[dict] | None = None,
         tenant_id: Any | None = None,
+        allow_logged_retry: bool = False,
     ) -> int:
         existing_status = self._existing_email_status(raw_email_id, tenant_id=tenant_id)
-        if existing_status:
+        if existing_status and not allow_logged_retry:
             logger.info("Skipping already-logged email id=%s status=%s", raw_email_id, existing_status)
+            return 0
+        if existing_status and not self._is_retryable_logged_email(existing_status):
+            logger.info("Skipping non-retryable logged email id=%s status=%s", raw_email_id, existing_status)
             return 0
 
         display_name, sender = self._extract_sender(message)
@@ -395,9 +400,13 @@ class EmailIngestionService:
         )
         if catalog_email:
             logger.info("Reprocessing existing source email record id=%s", raw_email_id)
+            self.db.query(CatalogItem).filter(CatalogItem.catalog_email_id == catalog_email.id).delete(
+                synchronize_session=False
+            )
             catalog_email.processing_status = "processing"
             catalog_email.subject = subject
             catalog_email.received_at = email_date
+            catalog_email.pdf_url = None
             catalog_email.body_preview = self._body_preview(body_preview_text)
             catalog_email.duplicate_count = 0
         else:
@@ -1870,6 +1879,29 @@ class EmailIngestionService:
         key = self._status_key(status)
         return bool(key)
 
+    def _is_retryable_logged_email(self, status: str | None) -> bool:
+        key = self._status_key(status)
+        if key.endswith("_permanent"):
+            return False
+        return key.startswith(("failed", "error", "partial"))
+
+    def _terminal_retry_status(self, status: str | None) -> str:
+        key = self._status_key(status)
+        return "partial_permanent" if key.startswith("partial") else "failed_permanent"
+
+    def _mark_email_retry_attempt(self, raw_email_id: str, tenant_id: Any) -> None:
+        email_row = (
+            self.db.query(CatalogEmail)
+            .filter(CatalogEmail.raw_email_id == raw_email_id)
+            .filter(CatalogEmail.tenant_id == tenant_id)
+            .first()
+        )
+        if not email_row:
+            return
+        email_row.retry_count = int(email_row.retry_count or 0) + 1
+        email_row.last_attempt_at = datetime.now(UTC)
+        self.db.commit()
+
     def _raw_email_base_id(self, raw_email_id: str, account_id: Any) -> str:
         account_prefix = f"{account_id}:"
         if raw_email_id.startswith(account_prefix):
@@ -3072,6 +3104,7 @@ class EmailIngestionService:
         account_id: UUID,
         force_retry_failed: bool = False,
         retry_skipped: bool = False,
+        retry_failed_once: bool = False,
     ) -> int:
         from backend.app.models import CatalogEmail, EmailAccount, EmailFilter
         from backend.app.auth import decrypt_password
@@ -3311,13 +3344,34 @@ class EmailIngestionService:
                     " ".join(search_args),
                 )
 
-                # Fetch already processed email IDs cache to optimize DB lookup
+                # Fetch already processed email IDs cache to optimize DB lookup.
                 skipped_logged_email_ids = set()
+                retryable_logged_email_ids = set()
                 from backend.app.models import CatalogEmail
-                res = self.db.query(CatalogEmail.raw_email_id, CatalogEmail.processing_status).filter(CatalogEmail.tenant_id == active_tenant_id).all()
-                for raw_stored_id, status in res:
+                res = self.db.query(CatalogEmail).filter(CatalogEmail.tenant_id == active_tenant_id).all()
+                exhausted_retry_count = 0
+                for email_row in res:
+                    raw_stored_id = email_row.raw_email_id
+                    status = email_row.processing_status
+                    base_id = self._raw_email_base_id(raw_stored_id, account_id)
+                    if retry_failed_once and self._is_retryable_logged_email(status):
+                        current_retry_count = int(email_row.retry_count or 0)
+                        if current_retry_count < MAX_EMAIL_RETRY_ATTEMPTS:
+                            retryable_logged_email_ids.add(base_id)
+                            continue
+                        terminal_status = self._terminal_retry_status(status)
+                        if email_row.processing_status != terminal_status:
+                            email_row.processing_status = terminal_status
+                            exhausted_retry_count += 1
                     if self._should_skip_logged_email(status):
-                        skipped_logged_email_ids.add(self._raw_email_base_id(raw_stored_id, account_id))
+                        skipped_logged_email_ids.add(base_id)
+                if exhausted_retry_count:
+                    self.db.commit()
+                    logger.info(
+                        "Marked %s exhausted failed/partial email(s) as permanent for account %s",
+                        exhausted_retry_count,
+                        account_email_address,
+                    )
 
                 trusted_initial_import_counts: dict[str, int] = defaultdict(int)
                 for msg_id in ids:
@@ -3325,6 +3379,7 @@ class EmailIngestionService:
                     raw_id_str = f"{account_id}:{mailbox}:{msg_id_str}"
                     if raw_id_str in skipped_logged_email_ids:
                         continue
+                    should_retry_logged_email = raw_id_str in retryable_logged_email_ids
                     if raw_id_str in pending_email_ids:
                         continue
 
@@ -3512,7 +3567,15 @@ class EmailIngestionService:
                         # Process message if we have parse targets and matched everything
                         if parse_targets:
                             try:
-                                processed += self._process_message(message, raw_email_id=raw_id_str, parse_targets=parse_targets, tenant_id=active_tenant_id)
+                                if should_retry_logged_email:
+                                    self._mark_email_retry_attempt(raw_id_str, active_tenant_id)
+                                processed += self._process_message(
+                                    message,
+                                    raw_email_id=raw_id_str,
+                                    parse_targets=parse_targets,
+                                    tenant_id=active_tenant_id,
+                                    allow_logged_retry=should_retry_logged_email,
+                                )
                                 self._restore_unseen_after_processing(client, msg_id)
                             except Exception as pe:
                                 logger.exception("Failed processing email payload for raw_email_id=%s", raw_id_str)

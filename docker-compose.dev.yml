@@ -71,6 +71,8 @@ services:
       - backend.app.tasks
       - worker
       - --loglevel=info
+      - -Q
+      - celery,ingest
     volumes:
       - ./backend:/app/backend
     depends_on:
