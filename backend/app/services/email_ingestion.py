@@ -3231,25 +3231,15 @@ class EmailIngestionService:
                             except imaplib.IMAP4.error:
                                 pass
                         if not selected:
-                            # A manual/CLI poll should still work for mail that
-                            # has not yet been moved to the optional supplier
-                            # label. This is especially important for supplier
-                            # certificates arriving directly in INBOX.
-                            try:
-                                status_inbox, _ = client.select("INBOX")
-                                if status_inbox == "OK":
-                                    logger.warning(
-                                        "Supplier label mailbox was not found; falling back to INBOX for account %s",
-                                        account_email_address,
-                                    )
-                                    mailbox = "INBOX"
-                                    selected = True
-                            except imaplib.IMAP4.error:
-                                pass
-                        if not selected:
-                            raise RuntimeError(
-                                "Supplier label mailbox not found and INBOX could not be selected."
+                            msg = (
+                                "The 'Suppliers' label was not found in your mailbox. "
+                                "Create it and move supplier emails into it, or switch to trusted supplier approval mode in Email Settings."
                             )
+                            logger.warning("Supplier label mailbox was not found for account %s; sync stopped", account_email_address)
+                            account.sync_status = "error"
+                            account.sync_error_msg = msg
+                            self.db.commit()
+                            return 0
                     elif mailbox != "INBOX":
                         fallbacks = ["INBOX"]
                         selected = False
@@ -3609,8 +3599,8 @@ class EmailIngestionService:
                 .first()
             )
             if existing:
-                if body_text and not existing.body_preview:
-                    existing.body_preview = self._body_preview(body_text)
+                if existing.body_preview:
+                    existing.body_preview = None
                     self.db.commit()
                 return
 
@@ -3623,7 +3613,7 @@ class EmailIngestionService:
                     raw_email_id=raw_email_id,
                     subject=subject,
                     pdf_url=None,
-                    body_preview=self._body_preview(body_text),
+                    body_preview=None,
                     received_at=email_date or datetime.now(UTC),
                     processing_status=reason[:50],
                 )

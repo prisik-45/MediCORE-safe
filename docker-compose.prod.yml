@@ -2,12 +2,20 @@ services:
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required for production TLS}
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+    entrypoint:
+      - /bin/sh
+      - -c
+      - sh /docker-entrypoint.d/10-create-placeholder-cert.sh && exec /docker-entrypoint.sh nginx -g 'daemon off;'
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
-      - certbot_conf:/etc/letsencrypt:ro
+      - ./nginx/nginx.prod.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - ./nginx/docker-entrypoint.d/10-create-placeholder-cert.sh:/docker-entrypoint.d/10-create-placeholder-cert.sh:ro
+      - certbot_conf:/etc/letsencrypt
       - certbot_www:/var/www/certbot:ro
     depends_on:
       api:
@@ -180,29 +188,6 @@ services:
           mkdir -p "/backups/certificate-pdfs/$$ts"
           rclone sync "supabase:${SUPABASE_STORAGE_BUCKET:-catalog-pdfs}" "/backups/certificate-pdfs/$$ts"
           find /backups/certificate-pdfs -mindepth 1 -maxdepth 1 -type d -mtime +${CERTIFICATE_BACKUP_RETENTION_DAYS:-30} -exec rm -rf {} +
-          sleep "$$BACKUP_INTERVAL_SECONDS"
-        done
-
-  environment-backup:
-    image: alpine:3.20
-    profiles:
-      - backup
-    restart: unless-stopped
-    environment:
-      BACKUP_INTERVAL_SECONDS: ${ENV_BACKUP_INTERVAL_SECONDS:-86400}
-    volumes:
-      - ./.env:/source/.env:ro
-      - ./backups/environment:/backups/environment
-    command:
-      - sh
-      - -c
-      - |
-        set -eu
-        while true; do
-          ts=$$(date -u +%Y%m%dT%H%M%SZ)
-          cp /source/.env "/backups/environment/env-development-$$ts"
-          chmod 600 "/backups/environment/env-development-$$ts"
-          find /backups/environment -type f -name 'env-development-*' -mtime +${ENV_BACKUP_RETENTION_DAYS:-30} -delete
           sleep "$$BACKUP_INTERVAL_SECONDS"
         done
 

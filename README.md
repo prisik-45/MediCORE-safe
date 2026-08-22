@@ -103,6 +103,8 @@ MediCORE supports automated TLS certificate issuance and renewal via Certbot and
    docker compose -f docker-compose.prod.yml up -d --build
    ```
 
+   Set `DOMAIN=example.com` in the production `.env` before starting the stack. Nginx uses that value to render the TLS certificate path and creates a temporary self-signed certificate so HTTP challenge traffic can start before Let's Encrypt issues the real certificate.
+
 2. Request Let's Encrypt SSL certificate for your domain:
 
    ```bash
@@ -113,7 +115,7 @@ MediCORE supports automated TLS certificate issuance and renewal via Certbot and
    .\scripts\init_certbot.ps1 -Domain "example.com" -Email "admin@example.com"
    ```
 
-3. Certbot issues the certificate via the webroot challenge (`/var/www/certbot`), saves it to the persistent `certbot_conf` volume (`/etc/letsencrypt`), and reloads Nginx automatically.
+3. Certbot issues the certificate via the webroot challenge (`/var/www/certbot`), saves it to `/etc/letsencrypt/live/<your-domain>/`, replaces the temporary certificate, and reloads Nginx automatically.
 
 ### Automatic Certificate Renewal
 

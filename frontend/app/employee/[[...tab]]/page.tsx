@@ -2463,11 +2463,12 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
     setDisconnectAccountConfirmId(id);
   }
 
-  async function confirmDisconnectAccount() {
+  async function confirmDisconnectAccount(purgeData = false) {
     if (!disconnectAccountConfirmId) return;
     setDisconnectAccountLoading(true);
     try {
-      const res = await authFetch(`${apiBaseUrl}/api/email-accounts/${disconnectAccountConfirmId}`, {
+      const url = `${apiBaseUrl}/api/email-accounts/${disconnectAccountConfirmId}${purgeData ? "?purge_data=true" : ""}`;
+      const res = await authFetch(url, {
         method: "DELETE",
       });
       if (res.ok) {
@@ -4011,7 +4012,7 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
                                 textTransform: "uppercase",
                                 letterSpacing: "0.04em"
                               }}>
-                                {aiSettings?.has_api_key && aiSettings.api_key_last4 ? `OpenRouter ****${aiSettings.api_key_last4}` : "OpenRouter not configured"}
+                                {aiSettings?.has_api_key && aiSettings.api_key_last4 ? `API Key ****${aiSettings.api_key_last4}` : "API Key not configured"}
                               </span>
                             </div>
 
@@ -5072,28 +5073,38 @@ export default function Home({ params }: { params: Promise<{ tab?: string[] }> }
       {/* Action Confirmation Modals (Disconnect Account & Delete Catalog Email) */}
       {disconnectAccountConfirmId && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 33, 28, 0.4)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
-          <div style={{ background: "#ffffff", border: "1px solid #dce4df", borderRadius: "16px", padding: "32px", width: "440px", boxShadow: "0 20px 40px rgba(0,0,0,0.1)", textAlign: "center" }}>
+          <div style={{ background: "#ffffff", border: "1px solid #dce4df", borderRadius: "16px", padding: "32px", width: "520px", maxWidth: "calc(100vw - 32px)", boxShadow: "0 20px 40px rgba(0,0,0,0.1)", textAlign: "center" }}>
             <div style={{ background: "#fef2f2", color: "#ef4444", width: "48px", height: "48px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px auto" }}>
               <ShieldAlert size={24} />
             </div>
             <h3 style={{ fontSize: "18px", fontWeight: 700, color: "#17211c", margin: "0 0 10px 0" }}>Disconnect Inbox</h3>
-            <p style={{ fontSize: "14px", color: "#66736d", margin: "0 0 24px 0", lineHeight: 1.5 }}>
-              Are you sure you want to disconnect this inbox? MediCORE will completely stop polling and remove all configurations.
+            <p style={{ fontSize: "14px", color: "#66736d", margin: "0 0 14px 0", lineHeight: 1.5 }}>
+              Choose whether MediCORE should keep the extracted catalogue data or delete everything imported from this mailbox.
             </p>
-            <div style={{ display: "flex", gap: "12px" }}>
+            <p style={{ fontSize: "13px", color: "#7a5b12", background: "#fff7e6", border: "1px solid #fde7b3", borderRadius: "10px", padding: "10px 12px", margin: "0 0 20px 0", lineHeight: 1.45 }}>
+              Also revoke the MediCORE app password in your Google Account security settings after disconnecting.
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <button
                 onClick={() => setDisconnectAccountConfirmId(null)}
                 disabled={disconnectAccountLoading}
-                style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1px solid #dce4df", background: "none", color: "#66736d", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
+                style={{ padding: "12px", borderRadius: "10px", border: "1px solid #dce4df", background: "none", color: "#66736d", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
               >
                 Cancel
               </button>
               <button
-                onClick={confirmDisconnectAccount}
+                onClick={() => confirmDisconnectAccount(false)}
                 disabled={disconnectAccountLoading}
-                style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "none", background: "#ef4444", color: "#ffffff", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
+                style={{ padding: "12px", borderRadius: "10px", border: "1px solid #dce4df", background: "#ffffff", color: "#0f7a5f", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
               >
-                {disconnectAccountLoading ? "Disconnecting..." : "Disconnect"}
+                {disconnectAccountLoading ? "Disconnecting..." : "Disconnect Only"}
+              </button>
+              <button
+                onClick={() => confirmDisconnectAccount(true)}
+                disabled={disconnectAccountLoading}
+                style={{ gridColumn: "1 / -1", padding: "12px", borderRadius: "10px", border: "none", background: "#ef4444", color: "#ffffff", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
+              >
+                {disconnectAccountLoading ? "Deleting..." : "Disconnect and Delete Mailbox Data"}
               </button>
             </div>
           </div>

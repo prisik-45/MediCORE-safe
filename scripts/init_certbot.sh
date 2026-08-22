@@ -12,6 +12,15 @@ fi
 
 echo "=== Initializing Let's Encrypt Certificate for $DOMAIN ==="
 
+docker compose exec certbot sh -c '
+set -e
+domain="$1"
+marker="/etc/letsencrypt/.medicore-placeholder-${domain}"
+if [ -f "$marker" ]; then
+    rm -rf "/etc/letsencrypt/live/${domain}" "/etc/letsencrypt/archive/${domain}" "/etc/letsencrypt/renewal/${domain}.conf" "$marker"
+fi
+' sh "$DOMAIN"
+
 # Execute Certbot webroot challenge using active Nginx webroot
 docker compose exec certbot certbot certonly \
     --webroot \

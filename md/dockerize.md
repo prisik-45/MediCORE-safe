@@ -85,6 +85,7 @@ ENVIRONMENT=development
 APP_NAME=MediCORE
 API_BASE_URL=http://localhost:8000
 FRONTEND_ORIGIN=http://localhost:3000
+DOMAIN=example.com
 
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=replace-me
@@ -773,23 +774,27 @@ CERTIFICATE_BACKUP_RETENTION_DAYS=30
 
 If certificate PDFs are stored somewhere other than the Supabase Storage bucket, change the `certificate-pdf-backup` service to point to that location.
 
-### Environment Backup
+### Environment Secret Handling
 
-Service:
+There is intentionally no `environment-backup` service in production. Do not copy `.env.production` into `backups/`, Docker images, GitHub, Docker Hub, or any unencrypted archive.
 
-```text
-environment-backup
-```
+Safe VPS checklist:
 
-What it does:
+- Keep the production env file only on the Hostinger VPS deployment host.
+- Store it outside public web paths and restrict it to the deployment user/root, for example `chmod 600 .env.production`.
+- Use Docker Compose `--env-file .env.production` or a runtime `env_file`; do not bake secrets into Docker images.
+- Confirm Dockerfiles do not use `COPY . .`. The current backend image copies only `pyproject.toml`, `uv.lock`, `backend/`, and `scripts/`; the frontend image copies only `frontend/`.
+- Keep `.env`, `.env.*`, `frontend/.env*`, `backend/.env*`, `backups/`, dumps, archives, and key files excluded by `.dockerignore`.
 
-- Copies `.env.production` into `backups/environment`.
-- Runs every 24 hours by default.
-- Sets copied env files to mode `600`.
-- Deletes env backups older than 30 days by default.
+Cleanup checklist for existing VPS plaintext env backups:
 
-Important:
+- Inspect `./backups/environment/` on the VPS.
+- Delete only obsolete plaintext env backup files from that folder after confirming the active runtime `.env.production` is safe.
+- Treat any secret previously copied there as exposed. Plan rotation separately for Supabase service role keys, mailbox/AI encryption keys, OAuth secrets, API keys, and Valkey credentials.
+- Do not rotate encryption keys until you have a re-encryption plan for existing encrypted mailbox passwords and stored AI settings.
 
-- Environment backups contain secrets.
-- Keep `backups/` out of git.
-- Store production backups on encrypted disk or sync them to a private backup store.
+Backup security checklist:
+
+- Database dumps and certificate PDF backups should be encrypted before storage.
+- Move encrypted backup copies off the Hostinger VPS to a private backup store.
+- Avoid keeping the only backup copy on the same VPS that runs MediCORE.

@@ -1,18 +1,120 @@
 import imaplib
 import logging
+import json
+from urllib.parse import unquote, urlparse
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from backend.app.db import get_db
+from backend.app.config import get_settings
+from backend.app.db import get_db, get_supabase
 from backend.app.auth import get_current_user, encrypt_password
-from backend.app.models import EmailAccount, EmailFilter
+from backend.app.models import CatalogEmail, CatalogItem, EmailAccount, EmailFilter, EmailSyncSetting, Supplier
+from backend.app.schemas import clean_optional_text
 from backend.app.security import validate_public_network_host
 from backend.app.services.email_ingestion import filter_trusted_pending_approvals
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _storage_object_path_from_public_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    marker = "/storage/v1/object/public/"
+    parsed_path = urlparse(url).path
+    if marker not in parsed_path:
+        return None
+    bucket_and_path = parsed_path.split(marker, 1)[1]
+    bucket_prefix = f"{get_settings().supabase_storage_bucket}/"
+    if not bucket_and_path.startswith(bucket_prefix):
+        return None
+    return unquote(bucket_and_path[len(bucket_prefix):])
+
+
+def _certificate_storage_paths(raw_payload: dict | None) -> list[str]:
+    values = (raw_payload or {}).get("certificate_pdfs")
+    if not isinstance(values, list):
+        return []
+    return [
+        path
+        for row in values
+        if isinstance(row, dict)
+        for path in [clean_optional_text(row.get("storage_path"))]
+        if path
+    ]
+
+
+def _delete_storage_objects(object_paths: list[str]) -> None:
+    paths = list(dict.fromkeys(path for path in object_paths if path))
+    if not paths:
+        return
+    try:
+        get_supabase().storage.from_(get_settings().supabase_storage_bucket).remove(paths)
+    except Exception:
+        logger.warning("Failed to delete mailbox storage objects during disconnect purge", exc_info=True)
+
+
+def _pending_approval_belongs_to_account(item: dict, account_id: UUID) -> bool:
+    email_id = clean_optional_text(item.get("email_id"))
+    return bool(email_id and email_id.startswith(f"{account_id}:"))
+
+
+def _purge_mailbox_ingested_data(db: Session, account: EmailAccount) -> list[str]:
+    account_prefix = f"{account.id}:"
+    emails = (
+        db.query(CatalogEmail)
+        .filter(CatalogEmail.tenant_id == account.user_id)
+        .filter(CatalogEmail.raw_email_id.like(f"{account_prefix}%"))
+        .all()
+    )
+    email_ids = [email.id for email in emails]
+    supplier_ids = {email.supplier_id for email in emails}
+    storage_paths: list[str] = []
+
+    if email_ids:
+        items = db.query(CatalogItem).filter(CatalogItem.catalog_email_id.in_(email_ids)).all()
+        for item in items:
+            storage_paths.extend(_certificate_storage_paths(item.raw_payload))
+        db.query(CatalogItem).filter(CatalogItem.catalog_email_id.in_(email_ids)).delete(synchronize_session=False)
+
+    for email in emails:
+        storage_paths.extend(_certificate_storage_paths(getattr(email, "raw_payload", None)))
+        path = _storage_object_path_from_public_url(email.pdf_url)
+        if path:
+            storage_paths.append(path)
+        db.delete(email)
+
+    sync_setting = db.query(EmailSyncSetting).filter(EmailSyncSetting.user_id == account.user_id).first()
+    if sync_setting and sync_setting.pending_approvals:
+        try:
+            pending_items = json.loads(sync_setting.pending_approvals or "[]")
+        except Exception:
+            pending_items = []
+        if isinstance(pending_items, list):
+            kept_items = [
+                item
+                for item in pending_items
+                if not (isinstance(item, dict) and _pending_approval_belongs_to_account(item, account.id))
+            ]
+            sync_setting.pending_approvals = json.dumps(kept_items)
+
+    db.flush()
+    for supplier_id in supplier_ids:
+        has_emails = db.query(CatalogEmail.id).filter(CatalogEmail.supplier_id == supplier_id).first()
+        has_items = db.query(CatalogItem.id).filter(CatalogItem.supplier_id == supplier_id).first()
+        if not has_emails and not has_items:
+            supplier = (
+                db.query(Supplier)
+                .filter(Supplier.id == supplier_id)
+                .filter(Supplier.tenant_id == account.user_id)
+                .first()
+            )
+            if supplier:
+                db.delete(supplier)
+
+    return storage_paths
 
 # --- Pydantic Schemas ---
 
@@ -598,10 +700,11 @@ def update_email_account(
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_email_account(
     account_id: UUID,
+    purge_data: bool = Query(False, description="Delete emails, extracted catalogue rows, certificates, and pending approvals from this mailbox."),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Disconnect and completely delete an email account. Cascades filters."""
+    """Disconnect an email account. Optionally purge all ingested data for this mailbox."""
     user_uuid = UUID(current_user["id"])
     account = db.query(EmailAccount).filter(EmailAccount.id == account_id, EmailAccount.user_id == user_uuid).first()
     if not account:
@@ -611,8 +714,10 @@ def delete_email_account(
         )
     
     try:
+        storage_paths = _purge_mailbox_ingested_data(db, account) if purge_data else []
         db.delete(account)
         db.commit()
+        _delete_storage_objects(storage_paths)
         return
     except Exception as e:
         db.rollback()

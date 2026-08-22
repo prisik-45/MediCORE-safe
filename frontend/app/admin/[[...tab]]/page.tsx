@@ -339,6 +339,11 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
     }
   }
 
+  function stripOpenRouter(text?: string | null): string {
+    if (!text) return "";
+    return text.replace(/OpenRouter\s*/gi, "").replace(/AI Provider API key/gi, "API key").trim();
+  }
+
   async function fetchAISettings() {
     setAiSettingsLoading(true);
     setAiSettingsError(null);
@@ -346,7 +351,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
       const response = await authFetch(`${getApiUrl()}/api/admin/ai-settings`);
-      if (!response.ok) throw new Error("Failed to load OpenRouter settings.");
+      if (!response.ok) throw new Error("Failed to load AI settings.");
       const data: AISettings = await response.json();
       setOpenRouterHasKey(data.has_api_key);
       setOpenRouterKeyLast4(data.api_key_last4 || null);
@@ -355,7 +360,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       setOpenRouterApiKey("");
       setAiSettingsLoaded(true);
     } catch (err: any) {
-      setAiSettingsError(err.message || "Failed to load OpenRouter settings.");
+      setAiSettingsError(stripOpenRouter(err.message) || "Failed to load AI settings.");
     } finally {
       setAiSettingsLoading(false);
     }
@@ -379,7 +384,8 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => ({}));
-        throw new Error(detail.detail || "Failed to save OpenRouter settings.");
+        const rawErr = detail.detail || "Failed to save AI settings.";
+        throw new Error(stripOpenRouter(rawErr) || "Failed to save AI settings.");
       }
       const data: AISettings = await response.json();
       setOpenRouterHasKey(data.has_api_key);
@@ -390,7 +396,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
       setAiSettingsSuccess(true);
       setTimeout(() => setAiSettingsSuccess(false), 3000);
     } catch (err: any) {
-      setAiSettingsError(err.message || "Failed to save OpenRouter settings.");
+      setAiSettingsError(stripOpenRouter(err.message) || "Failed to save AI settings.");
     } finally {
       setAiSettingsSaving(false);
     }
@@ -1243,7 +1249,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
             <div style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
               <div style={{ borderBottom: "1px solid var(--line)", paddingBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <h2 style={{ margin: 0, fontSize: "22px", fontWeight: 600, color: "#092f28", letterSpacing: "-0.3px" }}>OpenRouter API Key</h2>
+                  <h2 style={{ margin: 0, fontSize: "22px", fontWeight: 600, color: "#092f28", letterSpacing: "-0.3px" }}>API Key</h2>
                 </div>
               </div>
 
@@ -1273,7 +1279,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
                       color: "#16a34a",
                       fontSize: "13px",
                     }}>
-                      OpenRouter settings saved.
+                      AI settings saved.
                     </div>
                   )}
 
@@ -1281,7 +1287,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", paddingBottom: "12px", borderBottom: "1px solid var(--line)" }}>
                       <div>
                         <strong style={{ display: "block", fontSize: "14px", color: "var(--ink)" }}>Provider</strong>
-                        <span style={{ fontSize: "12.5px", color: "var(--muted)" }}>OpenRouter</span>
+                        <span style={{ fontSize: "12.5px", color: "var(--muted)" }}>AI Provider</span>
                       </div>
                       <span style={{
                         padding: "4px 12px",
@@ -1303,7 +1309,7 @@ export default function AdminWorkspacePage({ params }: { params: Promise<{ tab?:
                         type="password"
                         value={openRouterApiKey}
                         onChange={(e) => setOpenRouterApiKey(e.target.value)}
-                        placeholder={openRouterHasKey ? "Leave blank to keep existing key" : "OpenRouter API key"}
+                        placeholder={openRouterHasKey ? "Leave blank to keep existing key" : "API key"}
                         autoComplete="off"
                         disabled={aiSettingsSaving}
                         style={{
